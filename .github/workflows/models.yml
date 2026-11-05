@@ -73,12 +73,32 @@ jobs:
           set -euo pipefail
           test -n "$KAGGLE_API_TOKEN" || { echo "::error::The secret KAGGLE_API_TOKEN is not set"; exit 1; }
           case "$VERSION" in *[!0-9]*) echo "::error::The version is a number"; exit 1 ;; esac
+          # A token pasted with a space or a line break around it
+          KAGGLE_API_TOKEN="$(printf '%s' "$KAGGLE_API_TOKEN" | tr -d '[:space:]')"
+          export KAGGLE_API_TOKEN
           python -m venv "$RUNNER_TEMP/kaggle"
           "$RUNNER_TEMP/kaggle/bin/pip" install --quiet "kaggle>=2" six
           py="$RUNNER_TEMP/kaggle/bin/python"
           # Kaggle takes the owner from the token, and names it in its errors: masked from here on
           owner="$("$py" -c 'from kaggle import api; print(api.get_config_value("username") or "")' | tail -n 1)"
-          test -n "$owner" || { echo "::error::KAGGLE_API_TOKEN is not a valid Kaggle API token"; exit 1; }
+          if [ -z "$owner" ]; then
+            # Why, without the token: its form, and Kaggle's answer about it
+            "$py" - <<'PY' || true
+          import os, re
+          from kaggle import api
+          t = os.environ["KAGGLE_API_TOKEN"]
+          form = ("an API token (KGAT_…)" if t.startswith("KGAT_") else
+                  "the legacy key of kaggle.json, not an API token" if re.fullmatch(r"[0-9a-f]{32}", t) else
+                  "neither an API token (KGAT_…) nor a legacy key")
+          print(f"KAGGLE_API_TOKEN: {len(t)} characters, {form}")
+          try:
+              print("Kaggle: the token is " + ("active" if api._introspect_token(t) else "not active (wrong, revoked or expired)"))
+          except Exception as e:
+              print(f"Kaggle did not answer: {type(e).__name__} {getattr(getattr(e, 'response', None), 'status_code', '')}")
+          PY
+            echo "::error::Kaggle did not accept KAGGLE_API_TOKEN: make one at kaggle.com › Settings › API › Generate New Token"
+            exit 1
+          fi
           echo "::add-mask::$owner"
           read -r stage folder < <(python release_model.py --source-of "$MODEL")
           # Only the model's folder of the stage's output: not its vectors, its reports or its log
