@@ -1,6 +1,6 @@
 """The quote searches of ../eval-real/quotes/ (the Gemara's, the Mishnah's, verses) with the lines that hold each quote as
 its candidates: does the source come first among the lines that quote it, by a line's vector alone (today) or with its
-parts' vectors (rank.py)? docs/SEARCH_ORDER_ISSUES.md, 7: commentators come before the source, a long source line
+parts' vectors (rank.py)? Pardes's docs/SEARCH_ORDER_ISSUES.md, 7: commentators come before the source, a long source line
 "dissolves". The source as ../eval-real/level_order.py --quotes counts it: a line holding the search's expected words
 (tags, niqqud and teamim off), of the Bavli (gemara), of the Mishnah or the Talmuds (mishna), or of the Tanakh (verses),
 at the level of Chazal or of Scripture.

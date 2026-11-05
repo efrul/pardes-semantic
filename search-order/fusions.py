@@ -1,5 +1,5 @@
 """Other fusions of the app's candidates, offline, scored on eval-real (grades.tsv, as eval-real/score.py) and eval-100
-(expected.py): the rows of docs/SEARCH_ORDER_ISSUES.md, issues 1, 2, 7 and 9.
+(expected.py): the rows of Pardes's docs/SEARCH_ORDER_ISSUES.md, issues 1, 2, 7 and 9.
 
     python fusions.py real.jsonl e100.jsonl seforim.db [--diff NAME] [--trace history.jsonl LINE_IDS]
 

@@ -1,4 +1,4 @@
-"""A parity fixture for the app's port of the common-sources line (docs/COMMON_SOURCES_PLAN.md), ids only, no text.
+"""A parity fixture for the app's port of the common-sources line (Pardes's docs/COMMON_SOURCES_PLAN.md), ids only, no text.
 
 For each eval-100 question with a source set in expected.py: the app's page (the first 20 fused lines, with their
 books), the fused rank of the lines below it, the search's scope, each page line's links (the other line and its book,
@@ -9,7 +9,7 @@ ranked as the app can, by the place in the first 20 only. Plus the ids of the ba
 books) on every question.
 
     python3 -I -B common_source_fixture.py eval-100-results.jsonl seforim.db \
-        ../../SeforimApp/src/jvmTest/resources/search/common-sources-e100.json.gz
+        ../pardes/SeforimApp/src/jvmTest/resources/search/common-sources-e100.json.gz   # then committed in Pardes
 
 eval-100-results.jsonl is the output of eval-100/harness/Eval.kt (it holds the books' text: it stays out of the repo).
 The one in the repo was written from the run on the whole library with the student (the eval-100 column of

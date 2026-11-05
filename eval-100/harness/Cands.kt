@@ -7,7 +7,7 @@ import java.io.File
 import java.nio.file.Path
 
 // The candidates each side hands the fusion, under a scope the caller picks, with more lexical ones than the app takes
-// (semantic-model/eval-real/results-level-order.md). Compiled as Eval.kt, without HybridSearchEngine.kt.
+// (eval-real/results-level-order.md). Compiled as Eval.kt, without HybridSearchEngine.kt.
 // args: seforim.db, queries.tsv (id, group, query, expected), out.jsonl, auto|base|all, lexical count [nodense]
 // auto: as the app runs a search, base books first and all books when the lexical facets find none there.
 // nodense: the lexical side only (the dense one does not change with BM25's parameters; the BM25 runs set them with

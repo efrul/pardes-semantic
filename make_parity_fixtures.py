@@ -1,7 +1,7 @@
 """Writes the cases that HfTokenizerParityTest checks the app's cleaner and tokenizer against.
 
     python make_parity_fixtures.py --tokenizer build/model/tokenizer.json --db seforim.db \
-        --out ../SeforimApp/src/jvmTest/resources/semantic
+        --out pardes/SeforimApp/src/jvmTest/resources/semantic   # then committed in Pardes
 
 Each line of parity.jsonl.gz: {"text": raw, "clean": clean(raw), "query": ids of QUERY_PREFIX + clean at
 QUERY_MAX_TOKENS, "doc": ids of clean at DOCUMENT_MAX_TOKENS}, from the `tokenizers` library. The texts are the

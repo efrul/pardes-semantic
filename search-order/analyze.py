@@ -1,7 +1,7 @@
 """What the pages of the replayed history (harness/History.kt's jsonl) are made of, scope by scope: where the lines come
 from, short lines and their kinds, where the lexical side's first lands, base books against Zayit's page, repeated
 texts, the dense side's first score, the rows the screen shows of the first 25, and the short-line rule's effect.
-Issues 1, 2 and 6-10 of docs/SEARCH_ORDER_ISSUES.md.
+Issues 1, 2 and 6-10 of Pardes's docs/SEARCH_ORDER_ISSUES.md.
 
     python analyze.py history.jsonl history_meta.json seforim.db [--report order.md]
 

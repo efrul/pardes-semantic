@@ -1,5 +1,5 @@
 """The lexical side under other settings (harness/Bm25.kt), alone and fused as the app fuses it, scored on eval-real
-and eval-100: issue 5 of docs/SEARCH_ORDER_ISSUES.md.
+and eval-100: issue 5 of Pardes's docs/SEARCH_ORDER_ISSUES.md.
 
     python bm25score.py real.jsonl e100.jsonl bm25_real.jsonl bm25_e100.jsonl seforim.db
 

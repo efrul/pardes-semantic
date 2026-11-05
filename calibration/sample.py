@@ -1,6 +1,6 @@
 """The calibration sample: 100 (query, line) pairs from the judged pools of eval-real and eval-v1 batch 2, 50 from each,
 stratified by Claude's grade (about 25 of each grade 0-3 in all), one pair per query, for the owner to judge blind.
-python sample.py <semantic-model dir> seforim.db out.json key.tsv
+python sample.py <pardes-semantic dir> seforim.db out.json key.tsv
 The sample was drawn from the grades.tsv files of bd428a5 (lines judged later change it); out.json holds the text the
 page showed (kept out of the repository), key.tsv Claude's grades."""
 import csv, html, json, random, re, sqlite3, sys

@@ -13,7 +13,13 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
-repo="$(cd "$here/../.." && pwd)"
+root="$(cd "$here/.." && pwd)"
+# Pardes, whose engines these programs run: this repository's pardes submodule, and SeforimLibrary in it
+repo="$root/pardes"
+if [ ! -d "$repo/SeforimApp" ] || [ ! -d "$repo/SeforimLibrary/search" ]; then
+    echo "Check out Pardes first: git submodule update --init pardes && git -C pardes submodule update --init SeforimLibrary" >&2
+    exit 1
+fi
 out="$1"
 JAVA="${JAVA:-java}"
 mkdir -p "$out"
@@ -66,7 +72,7 @@ app="$repo/SeforimApp/src/jvmMain/kotlin/io/github/kdroidfilter/seforimapp"
 cp "$repo"/SeforimLibrary/search/src/jvmMain/kotlin/io/github/kdroidfilter/seforimlibrary/search/*.kt "$out/src/"
 cp "$app"/features/search/semantic/*.kt "$out/src/"
 cp "$app/framework/search/LongQuerySearchEngine.kt" "$app/framework/search/PardesLexicon.kt" "$app/core/coroutines/CoroutineUtils.kt" "$out/src/"
-cp "$repo/semantic-model/eval-100/harness/LoggerStub.kt" "$repo/semantic-model/eval-100/harness/Eval.kt" "$out/src/"
+cp "$root/eval-100/harness/LoggerStub.kt" "$root/eval-100/harness/Eval.kt" "$out/src/"
 cp "$here"/harness/*.kt "$out/src/"
 # The checkout may have CRLF line endings, the patch has LF
 sed -i 's/\r$//' "$out/src/LuceneSearchEngine.kt"

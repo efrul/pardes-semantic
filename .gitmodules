@@ -1,0 +1,4 @@
+[submodule "pardes"]
+	path = pardes
+	url = https://github.com/efrul/Pardes.git
+	branch = main

@@ -1,6 +1,6 @@
 """Ranks pool searches by the app's model (a pack's int8 ONNX, run as check_vectors.py runs it) by a line's whole vector,
 as the index holds it today, and with more vectors for the parts of a long line: the long-lines problem of
-docs/SEARCH_ORDER_ISSUES.md, 7 (README.md here).
+Pardes's docs/SEARCH_ORDER_ISSUES.md, 7 (README.md here).
 
     python rank.py --db seforim.db --model pardes-model --spec crfh.json --out build/passages/crfh \
         [--passages 128,256] [--chunks 128,256,512]

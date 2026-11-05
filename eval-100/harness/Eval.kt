@@ -9,7 +9,7 @@ import java.io.File
 import java.nio.file.Path
 import java.sql.DriverManager
 
-// The 100 queries through the app's own engines, outside the app (semantic-model/eval-100/README.md):
+// The 100 queries through the app's own engines, outside the app (eval-100/README.md):
 // SeforimLibrary's LuceneSearchEngine (lexical), the branch's HybridSearchEngine and IndependentSemanticSearch, with
 // the open model and pardes.vec.lucene next to seforim.db.lucene. Compiled with a standalone kotlinc
 // (kotlin-compiler-embeddable 2.2.21) against SeforimLibrary/search/src/jvmMain, the semantic package, LoggerStub.kt

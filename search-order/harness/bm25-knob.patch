@@ -7,7 +7,7 @@
 -        return searcher.apply { queryCachingPolicy = StableFiltersCachingPolicy }
 +        return searcher.apply {
 +            queryCachingPolicy = StableFiltersCachingPolicy
-+            // Harness only (semantic-model/search-order): BM25's k1 and b from Bm25Knob
++            // Harness only (pardes-semantic's search-order): BM25's k1 and b from Bm25Knob
 +            similarity = Bm25Knob.Delegate
 +        }
      }

@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# What the scripts write (build/) and models.yml works in
+build/
+dl/
+release/
+meta/
+
+# The library and its indexes, never in the repository
+*.db
+*.lucene

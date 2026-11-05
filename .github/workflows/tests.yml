@@ -1,0 +1,30 @@
+name: Tests
+
+# The scripts' own tests, and every script compiled, on each push and pull request. What needs the library, a GPU or
+# Pardes's code (the pardes/ submodule, not checked out here) runs by hand: README.md.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Compile every script
+        run: python -m compileall -q -x '(^|/)(\.git|pardes)/' .
+
+      - name: Tests
+        run: |
+          python eval-passages/test_passages.py
+          python test_release_model.py

@@ -51,7 +51,7 @@ from pardes_semantic.clean import clean  # noqa: E402
 from sample_targets import held_book_texts, held_out, neighbors, outside_set_books  # noqa: E402
 
 GOOD = 2
-SHORT_LINE_WORDS = 8  # docs/SEARCH_ORDER_ISSUES.md, 1: the short lines the semantic side brings first
+SHORT_LINE_WORDS = 8  # Pardes's docs/SEARCH_ORDER_ISSUES.md, 1: the short lines the semantic side brings first
 SHORT_QUERY_WORDS = 3
 COLUMNS = ("searchKey", "query", "lineId", "bookId", "grade", "rank", "searchCategoryId", "searchBookId", "searchTocId",
            "searchExtended", "model", "gradedAt")

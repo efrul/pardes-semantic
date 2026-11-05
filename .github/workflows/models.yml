@@ -1,0 +1,112 @@
+name: Model release
+
+# Publishes one of the semantic search's trained models as a release of this repository: the folder its stage left
+# on Kaggle (kaggle_run.py's kernels pardes-semantic-<stage>, private), checked, zipped and described by
+# release_model.py:
+#   student       distill's student
+#   student-onnx  embed's model-student: the student as the app runs it (int8 ONNX, as in a pack's pardes-model/)
+#   tuned         tune's: train's teacher trained further on train-v2's questions
+#   teacher       train's teacher: Dicta's model fine-tuned on the library's links
+# Its tag is <model>-<hash of its weights>, the hash in its id (pardes-model.json, the vector index), unless given.
+# A stage's newest run replaces its output on Kaggle: release a model before its stage runs again (or name the
+# version that made it).
+#
+# Secret: KAGGLE_API_TOKEN, an API token of the Kaggle account the kernels belong to (kaggle.com › Settings › API).
+# That account is never named here, in the log (masked) or in the files released (release_model.py rewrites a path
+# that names it and refuses it anywhere else). Runs only by hand: Actions › Model release › Run workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'The model'
+        type: choice
+        options: [student, student-onnx, tuned, teacher]
+        default: student
+      version:
+        description: "The stage's version on Kaggle (empty: its latest)"
+        type: string
+        default: ''
+      note:
+        description: 'A line at the top of the notes, e.g. which run or pack it is'
+        type: string
+        default: ''
+      tag:
+        description: 'The tag (empty: <model>-<hash of its weights>)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: model-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        # A teacher is a few GB, and its zip as many again
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h .
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download, check and zip the model
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+          MODEL: ${{ inputs.model }}
+          VERSION: ${{ inputs.version }}
+          NOTE: ${{ inputs.note }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          test -n "$KAGGLE_API_TOKEN" || { echo "::error::The secret KAGGLE_API_TOKEN is not set"; exit 1; }
+          case "$VERSION" in *[!0-9]*) echo "::error::The version is a number"; exit 1 ;; esac
+          python -m venv "$RUNNER_TEMP/kaggle"
+          "$RUNNER_TEMP/kaggle/bin/pip" install --quiet "kaggle>=2" six
+          py="$RUNNER_TEMP/kaggle/bin/python"
+          # Kaggle takes the owner from the token, and names it in its errors: masked from here on
+          owner="$("$py" -c 'from kaggle import api; print(api.get_config_value("username") or "")' | tail -n 1)"
+          test -n "$owner" || { echo "::error::KAGGLE_API_TOKEN is not a valid Kaggle API token"; exit 1; }
+          echo "::add-mask::$owner"
+          read -r stage folder < <(python release_model.py --source-of "$MODEL")
+          # Only the model's folder of the stage's output: not its vectors, its reports or its log
+          KERNEL="$owner/pardes-semantic-$stage${VERSION:+/$VERSION}" FOLDER="$folder" "$py" - <<'PY'
+          import os
+          from kaggle import api
+          files, _ = api.kernels_output(os.environ["KERNEL"], "dl", file_pattern=f"^{os.environ['FOLDER']}/",
+                                        force=True, quiet=True)
+          print(f"{sum(not f.endswith('.log') for f in files)} files downloaded")
+          PY
+          rm -f dl/*.log
+          test -d "dl/$folder" || { echo "::error::The output of $stage has no $folder/"; exit 1; }
+          du -sh "dl/$folder"
+          KAGGLE_OWNER="$owner" python release_model.py --model "$MODEL" --folder "dl/$folder" --out release \
+            --meta meta --version "$VERSION" --note "$NOTE" --tag "$TAG" \
+            --repo-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" --commit "$GITHUB_SHA"
+          rm -rf dl
+          ls -l release
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$(cat meta/tag.txt)"
+          if gh release view "$tag" -R "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::error::$tag is already released"; exit 1
+          fi
+          gh release create "$tag" release/* -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "$(cat meta/title.txt)" --notes-file meta/notes.md
+          echo "Released [$tag]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$tag)" >> "$GITHUB_STEP_SUMMARY"

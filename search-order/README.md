@@ -2,7 +2,7 @@
 
 # הכלים של בדיקת הסדר
 
-הכלים שמאחורי [`docs/SEARCH_ORDER_ISSUES.md`](../../docs/SEARCH_ORDER_ISSUES.md): הרצת היסטוריית החיפושים דרך המנועים של
+הכלים שמאחורי [`docs/SEARCH_ORDER_ISSUES.md`](https://github.com/efrul/Pardes/blob/main/docs/SEARCH_ORDER_ISSUES.md) של פרדס: הרצת היסטוריית החיפושים דרך המנועים של
 האפליקציה, ניתוח של ממה הרשימה בנויה, מיזוגים אחרים של אותם מועמדים, החיפוש הרגיל בהגדרות אחרות, ומעקב אחרי שורה אחת.
 
 ## הקבצים

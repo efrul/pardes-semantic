@@ -10,7 +10,7 @@ import java.nio.file.Path
 import java.util.concurrent.Executors
 import kotlin.math.sqrt
 
-// The vector index against an exact search, through the app's own dense search (semantic-model/BENCHMARK.md, section
+// The vector index against an exact search, through the app's own dense search (BENCHMARK.md, section
 // 4): each query's first ten of IndependentSemanticSearch.search (k = 150; all books, then base books only) and of an
 // exact scan of the same int8 vectors by cosine, as [line id, cosine], the time of the app's search, and the app's
 // float query vector (check_index.py compares it with Python's). Compiled as Eval.kt.
