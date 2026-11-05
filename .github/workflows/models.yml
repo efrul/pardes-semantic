@@ -80,7 +80,12 @@ jobs:
           "$RUNNER_TEMP/kaggle/bin/pip" install --quiet "kaggle>=2" six
           py="$RUNNER_TEMP/kaggle/bin/python"
           # Kaggle takes the owner from the token, and names it in its errors: masked from here on
-          owner="$("$py" -c 'from kaggle import api; print(api.get_config_value("username") or "")' | tail -n 1)"
+          # Kaggle has answered that a good token was not active once in a while: asked again before giving up
+          for attempt in 1 2 3; do
+            owner="$("$py" -c 'from kaggle import api; print(api.get_config_value("username") or "")' | tail -n 1)"
+            [ -n "$owner" ] && break
+            sleep 20
+          done
           if [ -z "$owner" ]; then
             # Why, without the token: its form, and Kaggle's answer about it
             "$py" - <<'PY' || true
