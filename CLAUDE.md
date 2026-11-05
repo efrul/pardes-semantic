@@ -27,9 +27,10 @@ pip install -r requirements.txt          # CPU torch; the CUDA wheel only for em
 python eval-passages/test_passages.py    # the tests tests.yml runs on every push
 python test_release_model.py
 git submodule update --init pardes       # Pardes, only for search-order/build.sh, eval-100/harness, the fixtures
+git -C pardes submodule update --init SeforimLibrary   # what build.sh compiles against
 ```
 
-Never `--recursive`: Pardes's own submodule is SeforimLibrary, and the library it builds is large.
+Not `--recursive`: of Pardes's submodules only SeforimLibrary is needed.
 
 ## Rules
 

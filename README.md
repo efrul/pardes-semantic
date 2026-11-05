@@ -17,7 +17,8 @@
 - **הקוד של היישום** שמשתמש במודל נמצא בפרדס, ב־`SeforimApp/.../features/search/semantic/`.
 - **פרדס כתת־מודול:** פרדס נמצא כאן כתת־מודול בתיקייה `pardes/`. משתמשים בו הכלים שבודקים את המודל מול הקוד של היישום:
   `search-order/build.sh`, `eval-100/harness/` ו־`make_parity_fixtures.py`. הסקריפטים של Python לא צריכים אותו. כשהוא
-  נדרש מריצים `git submodule update --init pardes`, בלי `--recursive`, כי הספרייה של פרדס גדולה.
+  נדרש מריצים `git submodule update --init pardes`, ולכלים שבונים מול הקוד גם
+  `git -C pardes submodule update --init SeforimLibrary`. לא `--recursive`: מהתת־מודולים של פרדס צריך רק את SeforimLibrary.
 - **רישיון:**
   - הקוד הוא חלק מפרדס ומופץ באותו רישיון: GNU AGPL v3 עם תנאי הייחוס הנוסף של זית (§7ב), ב־[LICENSE](LICENSE).
   - המודלים נגזרים מהמודל של דיקטה ומופצים לפי CC BY 4.0, ב־[NOTICE.md](NOTICE.md). דיקטה אינם קשורים לפרדס.
