@@ -53,7 +53,8 @@ Never `--recursive`: Pardes's own submodule is SeforimLibrary, and the library i
   - קרית חנה's questions and answers: not passed on;
   - users' search histories and feedback packages: the inbox (`feedback/fetch.py`) is kept outside the repository.
 - **The models' licences:**
-  - Dicta's CC BY 4.0: `NOTICE.md` travels with every model.
+  - Dicta's CC BY 4.0: `NOTICE.md` travels with every model. Pardes keeps a copy as `semantic-model/NOTICE.md`,
+    which Pardes for Android shows in its licences: a change here is made there too.
   - The training data's licences and permissions are in `TRAINING_PLAN.md`, רישוי. A new source gets its line there,
     and its credit in `NOTICE.md`, before a model learns from it.
 - **Git:**
