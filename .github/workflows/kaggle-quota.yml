@@ -1,0 +1,61 @@
+name: Kaggle quota
+
+# How much of the Kaggle account's weekly GPU quota is used, left, and held by running sessions, and when it renews:
+# `kaggle quota` for the account of KAGGLE_API_TOKEN, whose name is masked in the log as everywhere here.
+# Runs only by hand: Actions › Kaggle quota › Run workflow.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quota:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: The quota
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$KAGGLE_API_TOKEN" || { echo "::error::The secret KAGGLE_API_TOKEN is not set"; exit 1; }
+          KAGGLE_API_TOKEN="$(printf '%s' "$KAGGLE_API_TOKEN" | tr -d '[:space:]')"
+          export KAGGLE_API_TOKEN
+          python -m venv "$RUNNER_TEMP/kaggle"
+          "$RUNNER_TEMP/kaggle/bin/pip" install --quiet "kaggle>=2.2" six
+          py="$RUNNER_TEMP/kaggle/bin/python"
+          # Kaggle has answered that a good token was not active once in a while: asked again before giving up
+          for attempt in 1 2 3; do
+            owner="$("$py" -c 'from kaggle import api; print(api.get_config_value("username") or "")' | tail -n 1)"
+            [ -n "$owner" ] && break
+            sleep 20
+          done
+          test -n "$owner" || { echo "::error::Kaggle did not accept KAGGLE_API_TOKEN"; exit 1; }
+          echo "::add-mask::$owner"
+          "$py" - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          from datetime import timedelta, timezone
+          from zoneinfo import ZoneInfo
+          from kaggle import api
+
+          r = api.quota_view()
+          refresh = r.quota_refresh_time
+          if refresh is not None and refresh.utcoffset() is None:
+              refresh = refresh.replace(tzinfo=timezone.utc)
+          hours = lambda t: (t or timedelta()).total_seconds() / 3600
+          print("| | used | reserved by running sessions | left | of |")
+          print("|---|---|---|---|---|")
+          for name, q in (("GPU", r.gpu_quota), ("TPU", r.tpu_quota)):
+              if q is None:
+                  continue
+              used, held, total = hours(q.time_used), hours(q.time_reserved), hours(q.total_time_allowed)
+              print(f"| {name} | {used:.1f} h | {held:.1f} h | {max(0.0, total - used - held):.1f} h | {total:.1f} h |")
+          if refresh is not None:
+              local = refresh.astimezone(ZoneInfo("Asia/Jerusalem"))
+              print(f"\nRenews {refresh:%Y-%m-%d %H:%M} UTC ({local:%Y-%m-%d %H:%M} Israel)")
+          PY
