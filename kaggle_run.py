@@ -168,6 +168,9 @@ elif STAGE == "pool":
             models[name] = find_input(stage, name)
         except SystemExit as e:
             print(f"Not ranked: {e}", flush=True)
+    spec = find_data("pool.json")
+    if not spec:
+        raise SystemExit("No pool.json: attach the stage's private dataset")
     for name, source in models.items():
         # The stage's --hours bound it, as the weekly quota's check counts on them: no model is begun in its last half hour
         if time.time() > DEADLINE - 1800:
@@ -175,7 +178,7 @@ elif STAGE == "pool":
             continue
         src = f"--source {source}" if source else ""
         try:
-            sh(f"python pool_rank.py --db {TMP}/library/seforim.db --spec data/pool.json {src} --out {OUT}/ranks-{name}.json")
+            sh(f"python pool_rank.py --db {TMP}/library/seforim.db --spec {spec} {src} --out {OUT}/ranks-{name}.json")
         except subprocess.CalledProcessError as e:
             print(f"RANK {name} FAILED: {e}", flush=True)
 elif STAGE == "int8":
@@ -292,7 +295,9 @@ def push(stage: str, opts: argparse.Namespace) -> None:
     if stage == "pool":
         if not opts.spec or not opts.release:
             sys.exit("pool needs --spec (eval-pool/pool_spec.py's json) and --release (the evaluations' release)")
-        data["data/pool.json"] = opts.spec
+        # With crfh1672's 422 searches and the feedback's the script was 1,065 KB, which Kaggle refuses (400; 961 KB
+        # passed): the searches travel as a private dataset, as distill's do
+        datasets.append(upload(stage, {"pool.json": opts.spec}, opts.dry_run))
     script = TEMPLATE.replace("__STAGE__", repr(stage)).replace("__OPTIONS__", repr(json.dumps(options))) \
         .replace("__BUNDLE__", repr(bundle(data)))
     d = BUILD / stage
