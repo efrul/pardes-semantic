@@ -169,6 +169,10 @@ elif STAGE == "pool":
         except SystemExit as e:
             print(f"Not ranked: {e}", flush=True)
     for name, source in models.items():
+        # The stage's --hours bound it, as the weekly quota's check counts on them: no model is begun in its last half hour
+        if time.time() > DEADLINE - 1800:
+            print(f"Not ranked: {name}, the stage's --hours are spent", flush=True)
+            continue
         src = f"--source {source}" if source else ""
         try:
             sh(f"python pool_rank.py --db {TMP}/library/seforim.db --spec data/pool.json {src} --out {OUT}/ranks-{name}.json")
@@ -241,7 +245,34 @@ def upload(stage: str, files: dict[str, Path], dry_run: bool) -> str:
     sys.exit(f"{ds} is not ready after 10 min")
 
 
+def quota_left(cap: float) -> tuple[float, float, float, float, str]:
+    """The GPU hours left under [cap] of the account's weekly quota, with the hours used, those held by running sessions
+    (any of the account's, not only these stages'), the quota and when it renews."""
+    from datetime import timedelta
+
+    from kaggle import api
+
+    r = api.quota_view()
+    q = r.gpu_quota
+    hours = lambda t: (t or timedelta()).total_seconds() / 3600  # noqa: E731
+    used, held, total = hours(q.time_used), hours(q.time_reserved), hours(q.total_time_allowed)
+    return cap * total - used - held, used, held, total, f"{r.quota_refresh_time} UTC"
+
+
+def check_quota(stage: str, opts: argparse.Namespace) -> None:
+    """Refuses a stage whose --hours would take the week's GPU use past --quota-cap of the quota: the stages that train
+    stop by their --hours (and pool ranks no model after them), so a stage that fits is a stage that ends in time."""
+    left, used, held, total, renews = quota_left(opts.quota_cap)
+    print(f"GPU quota: {used:.1f} h used, {held:.1f} h held by running sessions, of {total:.1f} h; {left:.1f} h left "
+          f"under {opts.quota_cap:.0%}")
+    if opts.hours > left:
+        sys.exit(f"Not pushed: {stage} with --hours {opts.hours:g} would pass {opts.quota_cap:.0%} of the weekly GPU "
+                 f"quota ({left:.1f} h left). Give it fewer --hours, or wait for the quota to renew ({renews}).")
+
+
 def push(stage: str, opts: argparse.Namespace) -> None:
+    if not opts.dry_run and stage != "int8":
+        check_quota(stage, opts)
     options = {"hours": opts.hours, "pairs": opts.pairs, "batch": opts.batch, "texts": opts.texts, "distill_batch": opts.distill_batch,
                "chosen": opts.chosen, "weight": opts.weight, "release": opts.release, "links": opts.links,
                "repeat": opts.repeat, "teacher": opts.teacher, "models": opts.models,
@@ -305,7 +336,12 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("action", choices=("push", "status", "wait", "output"))
     ap.add_argument("stage", choices=STAGES)
-    ap.add_argument("--hours", type=float, default=8.0, help="the stage's time budget (sessions: 9-12 h)")
+    ap.add_argument("--hours", type=float, default=8.0,
+                    help="the stage's time budget (sessions: 9-12 h): train, tune, distill and pool stop by it; for embed "
+                         "it is only what the quota's check counts")
+    ap.add_argument("--quota-cap", type=float, default=1.0,
+                    help="push: refuse a stage whose --hours would take the week's GPU use past this share of the quota "
+                         "(a stage the quota cuts off loses its output)")
     ap.add_argument("--pairs", type=int, default=150_000, help="train: training pairs")
     ap.add_argument("--batch", type=int, default=128, help="train: batch size (128 fits 16 GB)")
     ap.add_argument("--questions", type=Path, help="tune: train-v2/build_pairs.py's questions (--hold-benchmark)")
