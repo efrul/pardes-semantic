@@ -31,6 +31,11 @@ def main() -> None:
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--dtype", default="float16")
     ap.add_argument("--batch-tokens", type=int, default=8192, help="padded tokens per batch")
+    ap.add_argument("--doc-source", help="embed the candidates with this model instead (a teacher), mapped into "
+                    "--source's space: --source then embeds only the queries")
+    ap.add_argument("--fit", type=int, default=20_000, help="--doc-source: candidates the linear map is fitted on")
+    ap.add_argument("--proj-out", type=Path, help="--doc-source: also the ranking by the doc model's own queries, "
+                    "mapped alike (what the map keeps of the doc model)")
     args = ap.parse_args()
     import torch
 
@@ -47,37 +52,82 @@ def main() -> None:
                 texts[line_id] = m.DOCUMENT_PREFIX + text
     print(f"{len(searches)} searches, {len(ids)} candidates, {len(texts)} of them in the index", flush=True)
 
-    loaded = m.load(args.device, getattr(torch, args.dtype), args.source)
+    dtype = getattr(torch, args.dtype)
     t0 = time.time()
+    queries = [m.QUERY_PREFIX + s["query"] for s in searches]
+    if args.doc_source:
+        # Asymmetric: the library's lines by a teacher (embedded once, offline), the queries by the small model the app
+        # runs. The student learnt the teacher's vectors projected to its dimensions, so a linear map, fitted by least
+        # squares on candidates both embed, takes the teacher's vectors into the student's space.
+        teacher = m.load(args.device, dtype, args.doc_source)
+        tvec = embed_docs(teacher, texts, args.batch_tokens)
+        tq = embed_queries(teacher, queries)
+        del teacher
+        if args.device.startswith("cuda"):
+            torch.cuda.empty_cache()
+        loaded = m.load(args.device, dtype, args.source)
+        rng = np.random.default_rng(5785)
+        ids = sorted(tvec)
+        sample = [ids[k] for k in rng.permutation(len(ids))[:args.fit]]
+        svec = embed_docs(loaded, {d: texts[d] for d in sample}, args.batch_tokens)
+        cut = int(len(sample) * 0.9)
+        T = np.stack([tvec[d] for d in sample]).astype(np.float64)
+        S = np.stack([svec[d] for d in sample]).astype(np.float64)
+        w = np.linalg.lstsq(T[:cut], S[:cut], rcond=None)[0]
+        held = normalize(T[cut:] @ w) * normalize(S[cut:])
+        print(f"map {T.shape[1]} -> {S.shape[1]} fitted on {cut} candidates: cosine to the student on the other "
+              f"{len(sample) - cut}, mean {held.sum(1).mean():.4f}, min {held.sum(1).min():.4f}", flush=True)
+        w = np.linalg.lstsq(T, S, rcond=None)[0]
+        vectors = dict(zip(ids, normalize(np.stack([tvec[d] for d in ids]) @ w).astype(np.float32)))
+        qv = normalize(embed_queries(loaded, queries)).astype(np.float32)
+        if args.proj_out:
+            write_ranks(searches, vectors, normalize(tq @ w).astype(np.float32), args.proj_out)
+    else:
+        loaded = m.load(args.device, dtype, args.source)
+        vectors = embed_docs(loaded, texts, args.batch_tokens)
+        qv = embed_queries(loaded, queries)
+    print(f"embedded in {(time.time() - t0) / 60:.1f} min", flush=True)
+    write_ranks(searches, vectors, qv, args.out)
+
+
+def normalize(v: np.ndarray) -> np.ndarray:
+    return v / np.maximum(np.linalg.norm(v, axis=-1, keepdims=True), 1e-12)
+
+
+def embed_docs(loaded, texts: dict, batch_tokens: int) -> dict:
+    """{line id: vector} of [texts], as embed_corpus.py: by length, as many as fit in the token budget once padded."""
     docs = sorted(texts)
     lengths = {}
     for i in range(0, len(docs), 20_000):
         enc = loaded.tokenizer([texts[d] for d in docs[i:i + 20_000]], truncation=True, max_length=m.DOCUMENT_MAX_TOKENS)
         lengths |= {d: len(x) for d, x in zip(docs[i:i + 20_000], enc["input_ids"])}
-    # As embed_corpus.py: by length, as many as fit in the token budget once padded to the longest
     docs.sort(key=lambda d: (lengths[d], d))
     vectors = {}
     i = 0
     while i < len(docs):
         j = i + 1
-        while j < len(docs) and (j - i + 1) * lengths[docs[j]] <= args.batch_tokens:
+        while j < len(docs) and (j - i + 1) * lengths[docs[j]] <= batch_tokens:
             j += 1
         batch = docs[i:j]
         vectors |= dict(zip(batch, m.embed(loaded, [texts[d] for d in batch], m.DOCUMENT_MAX_TOKENS)))
         i = j
-    queries = [m.QUERY_PREFIX + s["query"] for s in searches]
-    qv = np.concatenate([m.embed(loaded, queries[k:k + 64], m.QUERY_MAX_TOKENS) for k in range(0, len(queries), 64)])
-    print(f"embedded in {(time.time() - t0) / 60:.1f} min", flush=True)
+    return vectors
 
+
+def embed_queries(loaded, queries: list[str]) -> np.ndarray:
+    return np.concatenate([m.embed(loaded, queries[k:k + 64], m.QUERY_MAX_TOKENS) for k in range(0, len(queries), 64)])
+
+
+def write_ranks(searches: list, vectors: dict, qv: np.ndarray, path: Path) -> None:
     out = {}
     for s, q in zip(searches, qv):
         cands = [d for d in dict.fromkeys(s["candidates"]) if d in vectors]
         scores = np.stack([vectors[d] for d in cands]) @ q if cands else np.zeros(0)
         order = np.argsort(-scores, kind="stable")
         out[s["key"]] = {"ids": [cands[k] for k in order], "scores": [round(float(scores[k]), 5) for k in order]}
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(out) + "\n", "utf-8")
-    print(f"-> {args.out}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out) + "\n", "utf-8")
+    print(f"-> {path}")
 
 
 if __name__ == "__main__":

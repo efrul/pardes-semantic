@@ -159,24 +159,30 @@ elif STAGE == "pool":
     # The evaluations' searches, their candidates ranked by each model attached and the base one (eval-pool/README.md):
     # the release is the one the evaluations ran on, as the candidates are its line ids
     sh(f"python fetch_library.py --out {TMP}/library --release {OPTIONS['release']}")
-    wanted = OPTIONS["models"].split(",")
-    models = {"base": None} if "base" in wanted else {}
-    for stage, name in (("train", "teacher"), ("distill", "student"), ("tune", "tuned")):
-        if name not in wanted:
-            continue
+    # A model by its name; "asym:<teacher>" ranks by the student's queries against the teacher's lines (pool_rank.py
+    # --doc-source), as an index embedded by the teacher would, the app still running the student
+    stages = {"teacher": "train", "student": "distill", "tuned": "tune"}
+    runs = {}
+    for name in OPTIONS["models"].split(","):
         try:
-            models[name] = find_input(stage, name)
+            if name == "base":
+                runs["base"] = ""
+            elif name.startswith("asym:"):
+                doc = name.split(":", 1)[1]
+                runs[f"asym-{doc}"] = (f"--source {find_input('distill', 'student')} "
+                                       f"--doc-source {find_input(stages[doc], doc)} --proj-out {OUT}/ranks-proj-{doc}.json")
+            else:
+                runs[name] = f"--source {find_input(stages[name], name)}"
         except SystemExit as e:
-            print(f"Not ranked: {e}", flush=True)
+            print(f"Not ranked: {name}: {e}", flush=True)
     spec = find_data("pool.json")
     if not spec:
         raise SystemExit("No pool.json: attach the stage's private dataset")
-    for name, source in models.items():
+    for name, src in runs.items():
         # The stage's --hours bound it, as the weekly quota's check counts on them: no model is begun in its last half hour
         if time.time() > DEADLINE - 1800:
             print(f"Not ranked: {name}, the stage's --hours are spent", flush=True)
             continue
-        src = f"--source {source}" if source else ""
         try:
             sh(f"python pool_rank.py --db {TMP}/library/seforim.db --spec {spec} {src} --out {OUT}/ranks-{name}.json")
         except subprocess.CalledProcessError as e:
