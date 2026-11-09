@@ -130,8 +130,14 @@ elif STAGE == "distill":
     teacher = find_input("tune", "tuned") if OPTIONS["teacher"] == "tuned" else find_input("train", "teacher")
     pairs = os.path.join(find_input("train", "train"), "pairs.jsonl")
     queries = f"--queries {find_data('queries.txt')}" if find_data("queries.txt") else ""
-    sh(f"python distill_model.py --teacher {teacher} --pairs {pairs} {queries} --out {OUT}/student --texts {OPTIONS['texts']} --batch-size {OPTIONS['distill_batch']} "
-       f"--deadline {DEADLINE - 1800}")
+    if OPTIONS.get("rank"):
+        # The teacher's order too, on pairs (distill_rank.py): the links' first --links and the stage's --more pairs
+        more = " ".join(f"--more-pairs {find_data(name)}" for name in OPTIONS["more"])
+        sh(f"python distill_rank.py --teacher {teacher} --pairs {pairs} --links {OPTIONS['links']} {more} {queries} "
+           f"--out {OUT}/student --deadline {DEADLINE - 1800}")
+    else:
+        sh(f"python distill_model.py --teacher {teacher} --pairs {pairs} {queries} --out {OUT}/student --texts {OPTIONS['texts']} --batch-size {OPTIONS['distill_batch']} "
+           f"--deadline {DEADLINE - 1800}")
     sh(f"rm -rf {OUT}/student/checkpoints {OUT}/student/teacher-embeddings.npy")
     measure("student", f"{OUT}/student")
 elif STAGE == "embed":
@@ -288,7 +294,7 @@ def push(stage: str, opts: argparse.Namespace) -> None:
     options = {"hours": opts.hours, "pairs": opts.pairs, "batch": opts.batch, "texts": opts.texts, "distill_batch": opts.distill_batch,
                "chosen": opts.chosen, "weight": opts.weight, "release": opts.release, "links": opts.links,
                "repeat": opts.repeat, "teacher": opts.teacher, "models": opts.models,
-               "more": [f.name for f in opts.more] if stage == "tune" else []}
+               "rank": opts.rank, "more": [f.name for f in opts.more] if stage in ("tune", "distill") else []}
     data = {}
     if stage == "tune":
         if not opts.questions:
@@ -298,9 +304,11 @@ def push(stage: str, opts: argparse.Namespace) -> None:
     if stage == "tune" and opts.more:
         # Chavruta's pairs and the like are megabytes: they travel as a private dataset, as distill's searches do
         datasets.append(upload(stage, {f.name: f for f in opts.more}, opts.dry_run))
-    if stage == "distill" and opts.queries:
-        # 145k searches make a script of 2.5 MB, which Kaggle refuses: they travel as a private dataset
-        datasets.append(upload(stage, {"queries.txt": opts.queries}, opts.dry_run))
+    if stage == "distill" and (opts.queries or opts.more):
+        # 145k searches make a script of 2.5 MB, which Kaggle refuses: they travel as a private dataset, with --rank's pairs
+        files = {"queries.txt": opts.queries} if opts.queries else {}
+        files |= {f.name: f for f in opts.more}
+        datasets.append(upload(stage, files, opts.dry_run))
     if stage == "pool":
         if not opts.spec or not opts.release:
             sys.exit("pool needs --spec (eval-pool/pool_spec.py's json) and --release (the evaluations' release)")
@@ -362,13 +370,16 @@ def main() -> None:
     ap.add_argument("--repeat", type=int, default=10, help="tune: each question this many times")
     ap.add_argument("--links", type=int, default=20_000, help="tune: the first N of train's pairs, with the questions")
     ap.add_argument("--more", type=Path, action="append", default=[],
-                    help="tune: more pairs (build_chavruta_pairs.py's jsonl), as they are; repeatable")
+                    help="tune, distill --rank: more pairs (build_chavruta_pairs.py's jsonl), as they are; repeatable")
     ap.add_argument("--spec", type=Path, help="pool: eval-pool/pool_spec.py's searches")
     ap.add_argument("--models", default="base,teacher,student,tuned", help="pool: the models to rank by")
     ap.add_argument("--texts", type=int, default=300_000, help="distill: texts of train's pairs")
     ap.add_argument("--teacher", choices=("teacher", "tuned"), default="teacher",
                     help="distill: train's teacher, or tune's (train's on the training questions)")
     ap.add_argument("--queries", type=Path, help="distill: build_distill_queries.py's searches, distilled on too")
+    ap.add_argument("--rank", action="store_true",
+                    help="distill: learn the teacher's order on pairs too (distill_rank.py: --links of train's pairs and "
+                         "the --more pairs)")
     ap.add_argument("--distill-batch", type=int, default=32,
                     help="distill: batch per GPU (128 ran out of memory on a 16 GB T4)")
     ap.add_argument("--chosen", choices=("base", "teacher", "student"), default="student", help="embed: the model")
