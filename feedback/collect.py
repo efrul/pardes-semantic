@@ -24,7 +24,8 @@ The searches are the users' and the lines' text the library's, so everything is 
 - history.tsv: the searches made, of the packages that hold them (their senders chose to send them) and of --settings:
   sender, query, scope, how many times, when last;
 - daf/<Tractate>.json: the daf view's line review of the packages, in its own format (the app's pardes-daf/feedback/,
-  pardes-rashi-ocr's feedback.py reads it), one file a tractate, each line's newest mark of any sender.
+  pardes-rashi-ocr's feedback.py reads it), one file a tractate, each line's newest mark of any sender. A review whose
+  tractate is not a plain name, as the app names its layouts (BavaBatra), is left out: it would name a file elsewhere.
 And prints what the grades say: how often the first result was good, by the query's length, and how long the lines
 graded 0 are against the good ones (the semantic side's liking for very short lines).
 """
@@ -58,6 +59,7 @@ COLUMNS = ("searchKey", "query", "lineId", "bookId", "grade", "rank", "searchCat
 
 
 LOCAL = "local"  # the sender of --settings' grades
+TRACTATE = re.compile(r"[A-Za-z]+")  # a tractate as the app names its layout file; a package's goes into a file name
 HISTORY = ("query", "categoryId", "bookId", "tocId", "extended", "count", "lastAt")
 
 
@@ -281,7 +283,11 @@ def write_daf(daf: list[tuple[str, dict]], out: Path) -> None:
     if not daf:
         return
     tractates, marks = {}, defaultdict(dict)
+    refused = 0
     for sender, review in daf:
+        if not TRACTATE.fullmatch(str(review.get("tractate", ""))):
+            refused += 1
+            continue
         tractates.setdefault(review["tractate"], review)
         for m in review.get("marks", []):
             line = (review["tractate"], m["amud"], m["c"], m["i"], m["t"])
@@ -303,7 +309,8 @@ def write_daf(daf: list[tuple[str, dict]], out: Path) -> None:
             {"format": 1, "tractate": tractate, "tractateHe": review.get("tractateHe", tractate),
              "library": review.get("library"), "marks": kept}, ensure_ascii=False, indent=2) + "\n", "utf-8")
     print(f"{len(marks)} daf lines marked in {len(by_tractate)} tractates -> {folder}"
-          + (f"; {shared} lines marked by more than one sender, {differ} of them differently" if shared else ""))
+          + (f"; {shared} lines marked by more than one sender, {differ} of them differently" if shared else "")
+          + (f"; {refused} reviews left out, their tractate not a plain name" if refused else ""))
 
 
 def report(searches: dict, lines: dict) -> None:
