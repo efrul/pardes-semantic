@@ -171,6 +171,9 @@ elif STAGE == "pool":
                 doc = name.split(":", 1)[1]
                 runs[f"asym-{doc}"] = (f"--source {find_input('distill', 'student')} "
                                        f"--doc-source {find_input(stages[doc], doc)} --proj-out {OUT}/ranks-proj-{doc}.json")
+            elif "@" in name:  # "student@merge": the model, its short lines embedded otherwise (pool_rank.py)
+                model, mode = name.split("@", 1)
+                runs[f"{model}-{mode}"] = f"--source {find_input(stages[model], model)} --short-context {mode}"
             else:
                 runs[name] = f"--source {find_input(stages[name], name)}"
         except SystemExit as e:

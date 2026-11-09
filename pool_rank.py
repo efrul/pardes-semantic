@@ -36,6 +36,10 @@ def main() -> None:
     ap.add_argument("--fit", type=int, default=20_000, help="--doc-source: candidates the linear map is fitted on")
     ap.add_argument("--proj-out", type=Path, help="--doc-source: also the ranking by the doc model's own queries, "
                     "mapped alike (what the map keeps of the doc model)")
+    ap.add_argument("--short-context", choices=("none", "heading", "neighbors", "merge", "drop"), default="none",
+                    help="how a short line (--short-words or fewer) is embedded: as it is, after its table of contents "
+                    "entry, between its neighbours' words, not at all but before the next line's text, or not at all")
+    ap.add_argument("--short-words", type=int, default=8)
     args = ap.parse_args()
     import torch
 
@@ -51,6 +55,8 @@ def main() -> None:
             if len(text.split()) >= MIN_WORDS:
                 texts[line_id] = m.DOCUMENT_PREFIX + text
     print(f"{len(searches)} searches, {len(ids)} candidates, {len(texts)} of them in the index", flush=True)
+    if args.short_context != "none":
+        texts = short_context(con, texts, args.short_context, args.short_words)
 
     dtype = getattr(torch, args.dtype)
     t0 = time.time()
@@ -88,6 +94,104 @@ def main() -> None:
         qv = embed_queries(loaded, queries)
     print(f"embedded in {(time.time() - t0) / 60:.1f} min", flush=True)
     write_ranks(searches, vectors, qv, args.out)
+
+
+NEIGHBOUR_WORDS = 40  # of each neighbour, so that the short line stays the middle of its text
+
+
+def short_context(con, texts: dict, mode: str, short_words: int) -> dict:
+    """[texts] with their short lines embedded otherwise (docs/SEARCH_ORDER_ISSUES.md, 1): the semantic side brings
+    headings and fragments of a line ("מאי טעמא? אמר רב יהודה:") first, as a vector of a few words is near many queries."""
+    def rows(where_ids):
+        out = {}
+        ids = sorted(where_ids)
+        for i in range(0, len(ids), 900):
+            chunk = ids[i:i + 900]
+            out |= {r[0]: r[1:] for r in con.execute(
+                f"SELECT id, bookId, lineIndex, tocEntryId, content FROM line WHERE id IN ({','.join('?' * len(chunk))})",
+                chunk)}
+        return out
+
+    def at(places):
+        """{(book, index): cleaned text} of the lines at [places]."""
+        by_book = {}
+        for b, x in places:
+            by_book.setdefault(b, set()).add(x)
+        out = {}
+        for b, xs in by_book.items():
+            xs = sorted(xs)
+            for i in range(0, len(xs), 900):
+                chunk = xs[i:i + 900]
+                for x, c in con.execute(f"SELECT lineIndex, content FROM line WHERE bookId = ? AND lineIndex IN "
+                                        f"({','.join('?' * len(chunk))})", [b, *chunk]):
+                    out[(b, x)] = clean(c or "")
+        return out
+
+    info = rows(texts)
+    words = {d: len(clean(info[d][3] or "").split()) for d in texts}
+    short = {d for d in texts if words[d] <= short_words}
+    out = dict(texts)
+    if mode == "drop":
+        for d in short:
+            del out[d]
+    elif mode == "heading":
+        # line_toc maps every line to its entries (line.tocEntryId only the lines the table of contents points to):
+        # the deepest of them, the siman's or the seif's rather than the book part's
+        entry = {}
+        shorts = sorted(short)
+        for i in range(0, len(shorts), 900):
+            chunk = shorts[i:i + 900]
+            for line_id, e, level in con.execute(
+                    f"SELECT lt.lineId, lt.tocEntryId, te.level FROM line_toc lt JOIN tocEntry te ON te.id = lt.tocEntryId "
+                    f"WHERE lt.lineId IN ({','.join('?' * len(chunk))})", chunk):
+                if line_id not in entry or level > entry[line_id][1]:
+                    entry[line_id] = (e, level)
+        entries = {e for e, _ in entry.values()}
+        heads = {}
+        for i in range(0, len(sorted(entries)), 900):
+            chunk = sorted(entries)[i:i + 900]
+            heads |= {e: (parent, text) for e, parent, text in con.execute(
+                f"SELECT te.id, te.parentId, tt.text FROM tocEntry te JOIN tocText tt ON tt.id = te.textId "
+                f"WHERE te.id IN ({','.join('?' * len(chunk))})", chunk)}
+        parents = {p for p, _ in heads.values() if p}
+        ptext = {}
+        for i in range(0, len(sorted(parents)), 900):
+            chunk = sorted(parents)[i:i + 900]
+            ptext |= {e: t for e, t in con.execute(f"SELECT te.id, tt.text FROM tocEntry te JOIN tocText tt ON "
+                                                     f"tt.id = te.textId WHERE te.id IN ({','.join('?' * len(chunk))})",
+                                                     chunk)}
+        for d in short:
+            e = entry.get(d, (None, 0))[0]
+            if e in heads:
+                parent, text = heads[e]
+                head = clean(" ".join(t for t in (ptext.get(parent), text) if t))
+                if head and head not in texts[d]:
+                    out[d] = m.DOCUMENT_PREFIX + head + " " + texts[d][len(m.DOCUMENT_PREFIX):]
+    elif mode == "neighbors":
+        near = at({(info[d][0], info[d][1] + k) for d in short for k in (-1, 1)})
+        for d in short:
+            b, x = info[d][0], info[d][1]
+            before = near.get((b, x - 1), "").split()[-NEIGHBOUR_WORDS:]
+            after = near.get((b, x + 1), "").split()[:NEIGHBOUR_WORDS]
+            out[d] = m.DOCUMENT_PREFIX + " ".join(before + [texts[d][len(m.DOCUMENT_PREFIX):]] + after)
+    elif mode == "merge":
+        for d in short:
+            del out[d]
+        prev = at({(info[d][0], info[d][1] - k) for d in out for k in (1, 2, 3)})
+        for d in list(out):
+            b, x = info[d][0], info[d][1]
+            lead = []
+            for k in (1, 2, 3):  # the short lines just before it: a heading, then a fragment
+                t = prev.get((b, x - k))
+                if t is None or not t or len(t.split()) > short_words:
+                    break
+                lead.insert(0, t)
+            if lead:
+                out[d] = m.DOCUMENT_PREFIX + " ".join(lead) + " " + out[d][len(m.DOCUMENT_PREFIX):]
+    changed = sum(out.get(d) != texts[d] for d in texts)
+    print(f"short lines ({short_words} words or fewer): {len(short)} of {len(texts)}; {mode}: {changed} texts "
+          f"changed or left out", flush=True)
+    return out
 
 
 def normalize(v: np.ndarray) -> np.ndarray:
