@@ -55,7 +55,12 @@ def main() -> None:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--layers", type=int, default=7)
     ap.add_argument("--dim", type=int, default=384)
-    ap.add_argument("--batch", type=int, default=64, help="pairs in a batch of pairs (its texts: twice as many)")
+    ap.add_argument("--batch", type=int, default=16,
+                    help="pairs in a batch of pairs (its texts: twice as many). 32 texts a step, as distill_model.py's "
+                         "32 a GPU: 64 pairs ran out of memory on a 16 GB T4 at the first step")
+    ap.add_argument("--teacher-embeddings", type=Path,
+                    help="the teacher's embeddings of these same texts, from an earlier run (its teacher-embeddings.npy): "
+                         "not computed again")
     ap.add_argument("--lr", type=float, default=1e-4)
     ap.add_argument("--temperature", type=float, default=0.05, help="of both score matrices (the model's scale of 20)")
     ap.add_argument("--rank-weight", type=float, default=1.0, help="the KL beside the MSE")
@@ -93,9 +98,21 @@ def main() -> None:
     if len(texts) <= args.dim:
         raise SystemExit(f"{len(texts)} texts cannot give a {args.dim}-dimension PCA")
 
-    teacher = load_st(args.teacher, args.device)
     cache = args.out / "teacher-embeddings.npy"
-    if cache.exists() and np.load(cache, mmap_mode="r").shape[0] == len(texts):
+    given = args.teacher_embeddings
+    if given and np.load(given, mmap_mode="r").shape[0] == len(texts):
+        # The same inputs give the same texts in the same order: the earlier run's embeddings are these texts'
+        teacher = load_st(args.teacher, "cpu")
+        raw = np.load(given).astype(np.float32)
+        print(f"Teacher embeddings from {given}")
+    elif given:
+        raise SystemExit(f"{given} holds {np.load(given, mmap_mode='r').shape[0]} embeddings, not {len(texts)}: "
+                         "not these texts")
+    else:
+        teacher = load_st(args.teacher, args.device)
+    if given:
+        pass
+    elif cache.exists() and np.load(cache, mmap_mode="r").shape[0] == len(texts):
         raw = np.load(cache)
         print(f"Teacher embeddings from {cache}")
     else:

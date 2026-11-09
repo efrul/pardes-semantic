@@ -133,8 +133,10 @@ elif STAGE == "distill":
     if OPTIONS.get("rank"):
         # The teacher's order too, on pairs (distill_rank.py): the links' first --links and the stage's --more pairs
         more = " ".join(f"--more-pairs {find_data(name)}" for name in OPTIONS["more"])
+        given = find_data("teacher-embeddings.npy")
+        given = f"--teacher-embeddings {given}" if given else ""
         sh(f"python distill_rank.py --teacher {teacher} --pairs {pairs} --links {OPTIONS['links']} {more} {queries} "
-           f"--out {OUT}/student --deadline {DEADLINE - 1800}")
+           f"{given} --out {OUT}/student --deadline {DEADLINE - 1800}")
     else:
         sh(f"python distill_model.py --teacher {teacher} --pairs {pairs} {queries} --out {OUT}/student --texts {OPTIONS['texts']} --batch-size {OPTIONS['distill_batch']} "
            f"--deadline {DEADLINE - 1800}")
@@ -256,11 +258,11 @@ def upload(stage: str, files: dict[str, Path], dry_run: bool) -> str:
         kaggle("datasets", "version", "-p", str(d), "-m", f"{stage} {time.strftime('%Y-%m-%d %H:%M')}")
     else:
         kaggle("datasets", "create", "-p", str(d))
-    for _ in range(60):
+    for _ in range(180):  # a teacher's embeddings (1.45 GB) take Kaggle longer than the searches
         time.sleep(10)
         if "ready" in kaggle("datasets", "status", ds, capture=True):
             return ds
-    sys.exit(f"{ds} is not ready after 10 min")
+    sys.exit(f"{ds} is not ready after 30 min")
 
 
 def quota_left(cap: float) -> tuple[float, float, float, float, str]:
@@ -304,10 +306,12 @@ def push(stage: str, opts: argparse.Namespace) -> None:
     if stage == "tune" and opts.more:
         # Chavruta's pairs and the like are megabytes: they travel as a private dataset, as distill's searches do
         datasets.append(upload(stage, {f.name: f for f in opts.more}, opts.dry_run))
-    if stage == "distill" and (opts.queries or opts.more):
+    if stage == "distill" and (opts.queries or opts.more or opts.teacher_embeddings):
         # 145k searches make a script of 2.5 MB, which Kaggle refuses: they travel as a private dataset, with --rank's pairs
         files = {"queries.txt": opts.queries} if opts.queries else {}
         files |= {f.name: f for f in opts.more}
+        if opts.teacher_embeddings:
+            files["teacher-embeddings.npy"] = opts.teacher_embeddings
         datasets.append(upload(stage, files, opts.dry_run))
     if stage == "pool":
         if not opts.spec or not opts.release:
@@ -377,6 +381,8 @@ def main() -> None:
     ap.add_argument("--teacher", choices=("teacher", "tuned"), default="teacher",
                     help="distill: train's teacher, or tune's (train's on the training questions)")
     ap.add_argument("--queries", type=Path, help="distill: build_distill_queries.py's searches, distilled on too")
+    ap.add_argument("--teacher-embeddings", type=Path,
+                    help="distill --rank: an earlier run's teacher-embeddings.npy of the same inputs, not computed again")
     ap.add_argument("--rank", action="store_true",
                     help="distill: learn the teacher's order on pairs too (distill_rank.py: --links of train's pairs and "
                          "the --more pairs)")
