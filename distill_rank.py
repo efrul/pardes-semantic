@@ -9,8 +9,11 @@ that learnt only the vectors kept about half of what the teacher gained, and los
     python distill_rank.py --teacher build/teacher --pairs pairs.jsonl --links 40 --dim 32 --limit 200 \
         --max-steps 3 --device cpu --out /tmp/smoke                                                       # a smoke test
 
-The batches alternate: a batch of pairs (MSE on its queries and passages, and the KL of their scores) and a batch of
-texts (MSE only: the searches of --queries and the texts of the pairs again). Writes a sentence-transformers directory,
+The batches alternate: a batch of pairs (the vectors of its queries and passages, and the KL of their scores) and a
+batch of texts (the vectors only: the searches of --queries and the texts of the pairs again). The vectors are learnt by
+their direction, 2(1 - cosine) to the projected teacher's, and not by distill_model.py's MSE: the app normalizes them,
+and the teacher's are not normalized (mean pooling only), so that their MSE (183 at the start) would leave the KL
+(about 0.5) no weight. Writes a sentence-transformers directory,
 as distill_model.py, that export_onnx.py --source and embed_corpus.py --source take.
 """
 
@@ -153,6 +156,9 @@ def main() -> None:
     amp_dtype = torch.bfloat16 if prec["bf16"] else torch.float16
     scaler = torch.amp.GradScaler("cuda", enabled=gpu and prec["fp16"])
 
+    def direction(out: torch.Tensor, want: torch.Tensor) -> torch.Tensor:
+        return (F.normalize(out, dim=-1) - F.normalize(want, dim=-1)).pow(2).sum(-1).mean()
+
     def embed(ids: list[int]) -> torch.Tensor:
         features = student.tokenize([texts[i] for i in ids])
         features = {k: v.to(args.device) for k, v in features.items()}
@@ -169,7 +175,7 @@ def main() -> None:
             p_ids = [pair_ids[k][1] for k in chunk]
             out = embed(q_ids + p_ids)
             want = targets[q_ids + p_ids].to(args.device)
-            mse = F.mse_loss(out, want)
+            mse = direction(out, want)
             qs, ps = F.normalize(out[:len(chunk)], dim=-1), F.normalize(out[len(chunk):], dim=-1)
             qt, pt = F.normalize(want[:len(chunk)], dim=-1), F.normalize(want[len(chunk):], dim=-1)
             student_scores = qs @ ps.T / args.temperature
@@ -179,12 +185,12 @@ def main() -> None:
                         + F.kl_div(F.log_softmax(student_scores.T, -1), F.softmax(teacher_scores.T, -1),
                                    reduction="batchmean"))
             loss = mse + args.rank_weight * kl
-            log["kl"] += float(kl)
+            log["kl"] += kl.item()
         else:
             out = embed(chunk)
-            mse = F.mse_loss(out, targets[chunk].to(args.device))
+            mse = direction(out, targets[chunk].to(args.device))
             loss = mse
-        log["mse"] += float(mse)
+        log["mse"] += mse.item()
         log["n"] += 1
         optimizer.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()
@@ -195,7 +201,7 @@ def main() -> None:
         schedule.step()
         if (step + 1) % 200 == 0 or step + 1 == steps:
             n = max(1, log["n"])
-            print(f"step {step + 1}/{steps}: mse {log['mse'] / n:.5f}, kl {log['kl'] / n:.4f}, "
+            print(f"step {step + 1}/{steps}: direction {log['mse'] / n:.5f}, kl {log['kl'] / n:.4f}, "
                   f"{(time.time() - t0) / 60:.1f} min", flush=True)
             log = {"mse": 0.0, "kl": 0.0, "n": 0}
 
@@ -204,7 +210,7 @@ def main() -> None:
     cache.unlink(missing_ok=True)
     (args.out / "distill-info.json").write_text(json.dumps(
         {"teacher": args.teacher or m.MODEL_ID, "layers": keep, "of": total, "dim": args.dim, "pcaExplained": explained,
-         "texts": len(texts), "pairs": len(pairs), "searches": len(searches), "method": "mse+kl",
+         "texts": len(texts), "pairs": len(pairs), "searches": len(searches), "method": "direction+kl",
          "temperature": args.temperature, "rankWeight": args.rank_weight, "batch": args.batch}, indent=2) + "\n", "utf-8")
     print(f"Saved to {args.out}")
 
