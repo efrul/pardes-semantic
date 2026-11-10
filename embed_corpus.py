@@ -40,6 +40,40 @@ def lines_from_db(db: Path, min_words: int) -> tuple[list[int], list[str]]:
     return ids, texts
 
 
+# The short lines merged into the next one: at most this many of them before a longer line, in the same book
+MERGE_LEAD = 3
+
+
+def lines_from_db_merged(db: Path, min_words: int, short_words: int, changed_only: bool,
+                         short_ids: list[int] | None = None) -> tuple[list[int], list[str]]:
+    """The library's lines with its short lines merged into the next one (eval-pool/results-run3.md, short lines, as
+    pool_rank.py --short-context merge measured them): a line of [short_words] words or fewer gets no vector, and the
+    next longer line of the same book begins with up to MERGE_LEAD such lines just before it, an empty line breaking
+    the run. With [changed_only], only the lines whose text changed; [short_ids] gets the lines left out that the index
+    held (the min_words or more)."""
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    ids, texts = [], []
+    book, lead = None, []
+    for line_id, book_id, content in con.execute("SELECT id, bookId, content FROM line ORDER BY bookId, lineIndex"):
+        if book_id != book:
+            book, lead = book_id, []
+        text = clean(content)
+        words = len(text.split())
+        if words == 0:
+            lead = []
+            continue
+        if words <= short_words:
+            lead = (lead + [text])[-MERGE_LEAD:]
+            if short_ids is not None and words >= min_words:
+                short_ids.append(line_id)
+            continue
+        if words >= min_words and (lead or not changed_only):
+            ids.append(line_id)
+            texts.append(" ".join(lead + [text]))
+        lead = []
+    return ids, texts
+
+
 def lines_from_corpus(path: Path) -> tuple[list[int], list[str]]:
     ids, texts = [], []
     with path.open(encoding="utf-8") as f:
@@ -117,13 +151,22 @@ def main() -> int:
     ap.add_argument("--batch-tokens", type=int, default=8192, help="padded tokens per batch")
     ap.add_argument("--min-words", type=int, default=MIN_WORDS)
     ap.add_argument("--limit", type=int, default=0, help="embed only the first N lines (a dry run)")
+    ap.add_argument("--short-merge", type=int, default=0,
+                    help="--db: lines of this many words or fewer get no vector, and begin the next longer line's text "
+                         "(0: every line as it is)")
+    ap.add_argument("--changed-only", action="store_true",
+                    help="--short-merge: only the lines whose text the merging changed, to patch an index's vectors")
     args = ap.parse_args()
 
     backend = OnnxBackend(args.model, args.threads) if args.backend == "onnx" \
         else TorchBackend(args.device, args.dtype, args.source)
     dim = backend.dimension
     t0 = time.time()
-    ids, texts = lines_from_db(args.db, args.min_words) if args.db else lines_from_corpus(args.corpus)
+    short_ids: list[int] = []
+    if args.db and args.short_merge:
+        ids, texts = lines_from_db_merged(args.db, args.min_words, args.short_merge, args.changed_only, short_ids)
+    else:
+        ids, texts = lines_from_db(args.db, args.min_words) if args.db else lines_from_corpus(args.corpus)
     prefix = backend.manifest.get("documentPrefix", "")
     texts = [prefix + t for t in texts]
     print(f"{len(ids)} lines read in {time.time() - t0:.0f}s", flush=True)
@@ -156,6 +199,11 @@ def main() -> int:
         "minWords": args.min_words,
         "source": str(args.db or args.corpus),
     }
+    if args.short_merge:
+        info |= {"shortMerge": args.short_merge, "mergeLead": MERGE_LEAD, "changedOnly": args.changed_only,
+                 "shortLinesLeftOut": len(short_ids)}
+        # The lines that get no vector, for whoever patches an index with these vectors (merge_vectors.py)
+        np.array(sorted(short_ids), dtype="<i8").tofile(out / "short-ids.i64")
     if args.db and (args.db.parent / "release_info.txt").exists():
         info["dbRelease"] = (args.db.parent / "release_info.txt").read_text().strip()
     (out / "embed-info.json").write_text(json.dumps(info, ensure_ascii=False, indent=2) + "\n", "utf-8")

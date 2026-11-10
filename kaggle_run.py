@@ -39,7 +39,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 BUILD = HERE / "build" / "kaggle"
-STAGES = ("train", "tune", "distill", "embed", "int8", "pool")
+STAGES = ("train", "tune", "distill", "embed", "int8", "pool", "patch")
 CODE = ["*.py", "pardes_semantic/*.py", "NOTICE.md"]
 
 # The script Kaggle runs: unpacks the code, installs what Kaggle's image lacks, runs the stage
@@ -198,6 +198,21 @@ elif STAGE == "pool":
             sh(f"python pool_rank.py --db {TMP}/library/seforim.db --spec {spec} {src} --out {OUT}/ranks-{name}.json")
         except subprocess.CalledProcessError as e:
             print(f"RANK {name} FAILED: {e}", flush=True)
+elif STAGE == "patch":
+    # The library's lines that merging the short lines changes (embed_corpus.py --short-merge --changed-only), embedded
+    # with a model released by this repository, as int8: an index's other vectors are kept (merge_vectors.py)
+    import urllib.request, zipfile
+    tag = OPTIONS["model_release"]
+    url = f"https://github.com/efrul/pardes-semantic/releases/download/{tag}/{tag}.zip"
+    print(f"$ download {url}", flush=True)
+    urllib.request.urlretrieve(url, f"{TMP}/model.zip")
+    zipfile.ZipFile(f"{TMP}/model.zip").extractall(f"{TMP}/model")
+    source = next(d for d, dirs, files in os.walk(f"{TMP}/model") if "modules.json" in files)
+    sh(f"python fetch_library.py --out {TMP}/library --release {OPTIONS['release']}")
+    sh(f"python embed_corpus.py --db {TMP}/library/seforim.db --backend torch --device cuda --dtype float16 "
+       f"--source {source} --short-merge {OPTIONS['short_merge']} --changed-only --out {TMP}/vectors-patch")
+    sh(f"python quantize_vectors.py --vectors {TMP}/vectors-patch --out {OUT}/vectors-patch-int8")
+    sh(f"cp {TMP}/vectors-patch/short-ids.i64 {OUT}/vectors-patch-int8/")
 elif STAGE == "int8":
     # The download: the vectors as the index stores them (2.2 GB for the library, not 8.8), and the query model
     vectors = find_input("embed", "vectors")
@@ -296,7 +311,7 @@ def push(stage: str, opts: argparse.Namespace) -> None:
     options = {"hours": opts.hours, "pairs": opts.pairs, "batch": opts.batch, "texts": opts.texts, "distill_batch": opts.distill_batch,
                "chosen": opts.chosen, "weight": opts.weight, "release": opts.release, "links": opts.links,
                "repeat": opts.repeat, "teacher": opts.teacher, "models": opts.models,
-               "rank": opts.rank, "more": [f.name for f in opts.more] if stage in ("tune", "distill") else []}
+               "rank": opts.rank, "model_release": opts.model_release, "short_merge": opts.short_merge, "more": [f.name for f in opts.more] if stage in ("tune", "distill") else []}
     data = {}
     if stage == "tune":
         if not opts.questions:
@@ -313,6 +328,8 @@ def push(stage: str, opts: argparse.Namespace) -> None:
         if opts.teacher_embeddings:
             files["teacher-embeddings.npy"] = opts.teacher_embeddings
         datasets.append(upload(stage, files, opts.dry_run))
+    if stage == "patch" and not (opts.model_release and opts.release):
+        sys.exit("patch needs --model-release (a model's release tag here, e.g. student-695cbe2) and --release")
     if stage == "pool":
         if not opts.spec or not opts.release:
             sys.exit("pool needs --spec (eval-pool/pool_spec.py's json) and --release (the evaluations' release)")
@@ -327,7 +344,7 @@ def push(stage: str, opts: argparse.Namespace) -> None:
     sources = {"train": [], "tune": [slug("train")],
                "distill": [slug("train")] + ([slug("tune")] if opts.teacher == "tuned" else []),
                "embed": [slug("train"), slug("distill")], "int8": [slug("embed")],
-               "pool": [slug("train"), slug("distill"), slug("tune")]}[stage]
+               "pool": [slug("train"), slug("distill"), slug("tune")], "patch": []}[stage]
     meta = {
         "id": slug(stage), "title": f"pardes-semantic-{stage}", "code_file": "run.py", "language": "python",
         "kernel_type": "script", "is_private": True, "enable_gpu": stage != "int8", "enable_internet": True,
@@ -389,6 +406,9 @@ def main() -> None:
     ap.add_argument("--distill-batch", type=int, default=32,
                     help="distill: batch per GPU (128 ran out of memory on a 16 GB T4)")
     ap.add_argument("--chosen", choices=("base", "teacher", "student"), default="student", help="embed: the model")
+    ap.add_argument("--model-release", help="patch: the release tag of the model here (its <tag>.zip), e.g. student-695cbe2")
+    ap.add_argument("--short-merge", type=int, default=8,
+                    help="patch: lines of this many words or fewer merged into the next (embed_corpus.py)")
     ap.add_argument("--weight", type=float, default=3.0,
                     help="embed: the model's hybridDenseWeight (3: the fine-tuned model's best, BENCHMARK.md)")
     ap.add_argument("--release", help="embed: the SeforimLibrary release tag (default: the latest when the stage runs); "
