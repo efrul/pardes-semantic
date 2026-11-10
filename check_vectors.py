@@ -1,7 +1,8 @@
 """The library's vectors against their lines (BENCHMARK.md, section 4): N random rows of vecs.i8 against their line's
 text embedded again by the int8 ONNX model (cosine), and against the next row's line (what a shifted id would give).
 Vectors whose embed-info.json says shortMerge (embed_corpus.py --short-merge, merge_vectors.py) are checked against the
-text they were embedded from, the short lines just before the line and the line, and none of their lines may be short.
+text they were embedded from, the short lines just before the line and the line, and none of their lines may be short;
+with stripNumber too, without a number in parentheses at a line's start.
 
     python check_vectors.py build/vectors-int8 build/model-student seforim.db [N]
 """
@@ -17,6 +18,7 @@ import onnxruntime as ort
 from tokenizers import Tokenizer
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from embed_corpus import strip_number  # noqa: E402
 from pardes_semantic.clean import clean  # noqa: E402
 
 
@@ -36,18 +38,19 @@ def main() -> None:
     info_path = vec_dir / "embed-info.json"
     info = json.loads(info_path.read_text(encoding="utf-8")) if info_path.exists() else {}
     merge, lead_max = info.get("shortMerge") or 0, info.get("mergeLead") or 3
+    prep = (lambda t: strip_number(clean(t))) if info.get("stripNumber") else clean
 
     def text_of(line_id):
         """The text the line's vector was embedded from: as embed_corpus.py --short-merge reads the library."""
         book, index, content = con.execute("SELECT bookId, lineIndex, content FROM line WHERE id = ?",
                                            (line_id,)).fetchone()
-        text = clean(content)
+        text = prep(content)
         if not merge:
             return text
         lead = []
         for k in range(1, lead_max + 1):
             row = con.execute("SELECT content FROM line WHERE bookId = ? AND lineIndex = ?", (book, index - k)).fetchone()
-            t = clean(row[0] or "") if row else ""
+            t = prep(row[0] or "") if row else ""
             if not t or len(t.split()) > merge:
                 break
             lead.insert(0, t)
@@ -63,7 +66,7 @@ def main() -> None:
     same, shifted, short = [], [], 0
     for r in rng.sample(range(count - 1), n):
         text = text_of(int(ids[r]))
-        own = clean(con.execute("SELECT content FROM line WHERE id = ?", (int(ids[r]),)).fetchone()[0])
+        own = prep(con.execute("SELECT content FROM line WHERE id = ?", (int(ids[r]),)).fetchone()[0])
         short += merge > 0 and len(own.split()) <= merge
         v = embed(text)
         a, b = vecs[r].astype(np.float32), vecs[r + 1].astype(np.float32)
