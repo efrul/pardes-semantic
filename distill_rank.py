@@ -56,8 +56,11 @@ def main() -> None:
     ap.add_argument("--layers", type=int, default=7)
     ap.add_argument("--dim", type=int, default=384)
     ap.add_argument("--batch", type=int, default=16,
-                    help="pairs in a batch of pairs (its texts: twice as many). 32 texts a step, as distill_model.py's "
-                         "32 a GPU: 64 pairs ran out of memory on a 16 GB T4 at the first step")
+                    help="pairs a GPU in a batch of pairs (its texts: twice as many), all GPUs at once (DataParallel): "
+                         "32 texts a GPU, as distill_model.py's; 64 pairs on one 16 GB T4 ran out of memory")
+    ap.add_argument("--text-batches", choices=("searches", "all"), default="searches",
+                    help="the texts of the batches of texts: the searches only (the pairs' texts are learnt in the "
+                         "batches of pairs), or every text once more")
     ap.add_argument("--teacher-embeddings", type=Path,
                     help="the teacher's embeddings of these same texts, from an earlier run (its teacher-embeddings.npy): "
                          "not computed again")
@@ -152,20 +155,26 @@ def main() -> None:
     gc.collect()
     student.to(args.device)
     student.train()
+    gpus = torch.cuda.device_count() if gpu else 0
+    # Every GPU at once: a batch of pairs is split between them, its scores computed on the whole batch
+    forward = torch.nn.DataParallel(student) if gpus > 1 else student
+    batch = args.batch * max(1, gpus)
+    print(f"{max(1, gpus)} {'GPUs' if gpus > 1 else 'device'}: {batch} pairs a batch")
 
     # The batches, in a shuffled order: those of pairs, and those of texts (every text once more)
     pair_order = list(range(len(pair_ids)))
     rng.shuffle(pair_order)
-    text_order = list(range(len(texts)))
+    text_order = list(range(len(texts))) if args.text_batches == "all" else \
+        sorted({index[m.QUERY_PREFIX + q] for q in searches})
     rng.shuffle(text_order)
-    batches = [("pairs", pair_order[i:i + args.batch]) for i in range(0, len(pair_order), args.batch)]
-    batches += [("texts", text_order[i:i + 2 * args.batch]) for i in range(0, len(text_order), 2 * args.batch)]
+    batches = [("pairs", pair_order[i:i + batch]) for i in range(0, len(pair_order), batch)]
+    batches += [("texts", text_order[i:i + 2 * batch]) for i in range(0, len(text_order), 2 * batch)]
     rng.shuffle(batches)
     steps = len(batches) if not args.max_steps else min(args.max_steps, len(batches))
     print(f"{steps} steps: {sum(k == 'pairs' for k, _ in batches)} of pairs, {sum(k == 'texts' for k, _ in batches)} "
           f"of texts")
 
-    optimizer = torch.optim.AdamW(student.parameters(), lr=args.lr)
+    optimizer = torch.optim.AdamW(student.parameters(), lr=args.lr, fused=gpu)
     warmup = max(1, int(steps * 0.05))
     schedule = torch.optim.lr_scheduler.LambdaLR(
         optimizer, lambda s: min((s + 1) / warmup, max(0.0, (steps - s) / max(1, steps - warmup))))
@@ -180,9 +189,10 @@ def main() -> None:
         features = student.tokenize([texts[i] for i in ids])
         features = {k: v.to(args.device) for k, v in features.items()}
         with torch.autocast("cuda", dtype=amp_dtype, enabled=gpu):
-            return student(features)["sentence_embedding"].float()
+            return forward(features)["sentence_embedding"].float()
 
-    t0, log = time.time(), {"mse": 0.0, "kl": 0.0, "n": 0}
+    t0 = time.time()
+    log = {"mse": torch.zeros((), device=args.device), "kl": torch.zeros((), device=args.device), "n": 0}
     for step, (kind, chunk) in enumerate(batches[:steps]):
         if args.deadline and time.time() > args.deadline:
             print(f"Deadline reached at step {step}: stopping and saving", flush=True)
@@ -202,12 +212,12 @@ def main() -> None:
                         + F.kl_div(F.log_softmax(student_scores.T, -1), F.softmax(teacher_scores.T, -1),
                                    reduction="batchmean"))
             loss = mse + args.rank_weight * kl
-            log["kl"] += kl.item()
+            log["kl"] += kl.detach()
         else:
             out = embed(chunk)
             mse = direction(out, targets[chunk].to(args.device))
             loss = mse
-        log["mse"] += mse.item()
+        log["mse"] += mse.detach()
         log["n"] += 1
         optimizer.zero_grad(set_to_none=True)
         scaler.scale(loss).backward()
@@ -218,9 +228,9 @@ def main() -> None:
         schedule.step()
         if (step + 1) % 200 == 0 or step + 1 == steps:
             n = max(1, log["n"])
-            print(f"step {step + 1}/{steps}: direction {log['mse'] / n:.5f}, kl {log['kl'] / n:.4f}, "
+            print(f"step {step + 1}/{steps}: direction {log['mse'].item() / n:.5f}, kl {log['kl'].item() / n:.4f}, "
                   f"{(time.time() - t0) / 60:.1f} min", flush=True)
-            log = {"mse": 0.0, "kl": 0.0, "n": 0}
+            log = {"mse": torch.zeros((), device=args.device), "kl": torch.zeros((), device=args.device), "n": 0}
 
     student.eval()
     student.save(str(args.out))
@@ -228,7 +238,8 @@ def main() -> None:
     (args.out / "distill-info.json").write_text(json.dumps(
         {"teacher": args.teacher or m.MODEL_ID, "layers": keep, "of": total, "dim": args.dim, "pcaExplained": explained,
          "texts": len(texts), "pairs": len(pairs), "searches": len(searches), "method": "direction+kl",
-         "temperature": args.temperature, "rankWeight": args.rank_weight, "batch": args.batch}, indent=2) + "\n", "utf-8")
+         "temperature": args.temperature, "rankWeight": args.rank_weight, "batch": batch,
+         "textBatches": args.text_batches, "steps": step + 1, "ofSteps": len(batches)}, indent=2) + "\n", "utf-8")
     print(f"Saved to {args.out}")
 
 
