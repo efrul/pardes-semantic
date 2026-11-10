@@ -277,6 +277,12 @@ def marked_at(at: str) -> datetime:
     return datetime.fromisoformat(re.sub(r"(\.\d{6})\d+", r"\1", at.replace("Z", "+00:00")))
 
 
+def said(mark: dict) -> tuple:
+    """What a daf mark says of its line: right or wrong, how many words its start moves, and what is wrong with it
+    (how it is set on the page, its words: the app's two reasons, since 2026-11-10)."""
+    return mark.get("ok"), mark.get("cut", 0), bool(mark.get("layout")), bool(mark.get("words"))
+
+
 def write_daf(daf: list[tuple[str, dict]], out: Path) -> None:
     """The packages' daf reviews, one file a tractate in the app's format, each line's newest mark of any sender; and
     how many lines were marked by more than one sender, and how many of those differently."""
@@ -301,7 +307,7 @@ def write_daf(daf: list[tuple[str, dict]], out: Path) -> None:
         by_tractate[line[0]].append(newest_mark)
         if len(of) > 1:
             shared += 1
-            differ += len({(m.get("ok"), m.get("cut", 0)) for m in of.values()}) > 1
+            differ += len({said(m) for m in of.values()}) > 1
     for tractate, kept in sorted(by_tractate.items()):
         review = tractates[tractate]
         kept.sort(key=lambda m: (m["amud"], m["c"], m["i"]))

@@ -37,6 +37,26 @@ def test_only_a_plain_tractate_name_is_written():
         assert "2 reviews left out" in printed.getvalue()
 
 
+def test_what_is_wrong_with_a_line_goes_through_and_two_reasons_differ():
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp)
+        wrong = dict(mark(), ok=False)
+        daf = [
+            ("a", {"tractate": "Berakhot", "marks": [dict(wrong, layout=True, to=4)]}),
+            ("b", {"tractate": "Berakhot", "marks": [dict(wrong, words=True, at="2026-11-06T10:00:00Z")]}),
+        ]
+        with redirect_stdout(io.StringIO()) as printed:
+            write_daf(daf, out)
+        (kept,) = json.loads((out / "daf" / "Berakhot.json").read_text("utf-8"))["marks"]
+        assert kept["words"] is True and "layout" not in kept, "the newest mark, as it was sent"
+        assert "1 lines marked by more than one sender, 1 of them differently" in printed.getvalue()
+
+        with redirect_stdout(io.StringIO()) as printed:
+            write_daf([("a", {"tractate": "Shabbat", "marks": [{**wrong, "layout": True, "from": 1, "to": 4}]})], out)
+        (kept,) = json.loads((out / "daf" / "Shabbat.json").read_text("utf-8"))["marks"]
+        assert (kept["layout"], kept["from"], kept["to"]) == (True, 1, 4)
+
+
 if __name__ == "__main__":
     for name, test in list(globals().items()):
         if name.startswith("test_"):
