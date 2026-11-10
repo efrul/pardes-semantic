@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from embed_corpus import MIN_WORDS
+from embed_corpus import MIN_WORDS, strip_number
 from pardes_semantic import model as m
 from pardes_semantic.clean import clean
 
@@ -40,7 +40,12 @@ def main() -> None:
                     help="how a short line (--short-words or fewer) is embedded: as it is, after its table of contents "
                     "entry, between its neighbours' words, not at all but before the next line's text, or not at all")
     ap.add_argument("--short-words", type=int, default=8)
+    ap.add_argument("--strip-number", action="store_true",
+                    help="a line's number in parentheses at its start, \"(א)\" of every verse, out of its text "
+                         "(docs/SEARCH_ORDER_ISSUES.md, 3): the lines only, the queries have none")
     args = ap.parse_args()
+    global PREP
+    PREP = (lambda t: strip_number(clean(t))) if args.strip_number else clean
     import torch
 
     searches = json.loads(args.spec.read_text("utf-8"))["searches"]
@@ -51,7 +56,7 @@ def main() -> None:
         chunk = ids[i:i + 900]
         for line_id, content in con.execute(f"SELECT id, content FROM line WHERE id IN ({','.join('?' * len(chunk))})",
                                             chunk):
-            text = clean(content)
+            text = PREP(content)
             if len(text.split()) >= MIN_WORDS:
                 texts[line_id] = m.DOCUMENT_PREFIX + text
     print(f"{len(searches)} searches, {len(ids)} candidates, {len(texts)} of them in the index", flush=True)
@@ -96,6 +101,9 @@ def main() -> None:
     write_ranks(searches, vectors, qv, args.out)
 
 
+PREP = clean  # how a line's content becomes the text embedded: --strip-number adds embed_corpus.strip_number
+
+
 NEIGHBOUR_WORDS = 40  # of each neighbour, so that the short line stays the middle of its text
 
 
@@ -124,11 +132,11 @@ def short_context(con, texts: dict, mode: str, short_words: int) -> dict:
                 chunk = xs[i:i + 900]
                 for x, c in con.execute(f"SELECT lineIndex, content FROM line WHERE bookId = ? AND lineIndex IN "
                                         f"({','.join('?' * len(chunk))})", [b, *chunk]):
-                    out[(b, x)] = clean(c or "")
+                    out[(b, x)] = PREP(c or "")
         return out
 
     info = rows(texts)
-    words = {d: len(clean(info[d][3] or "").split()) for d in texts}
+    words = {d: len(PREP(info[d][3] or "").split()) for d in texts}
     short = {d for d in texts if words[d] <= short_words}
     out = dict(texts)
     if mode == "drop":

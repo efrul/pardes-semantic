@@ -84,6 +84,15 @@ def find_input(stage, name):
                 return d
     raise SystemExit(f"No {name} in the output of the {stage} stage: attach it (kernel_sources)")
 
+def release_model(tag):
+    # A model released by this repository (its <tag>.zip), unpacked: the folder that holds its modules.json
+    import urllib.request, zipfile
+    url = f"https://github.com/efrul/pardes-semantic/releases/download/{tag}/{tag}.zip"
+    print(f"$ download {url}", flush=True)
+    urllib.request.urlretrieve(url, f"{TMP}/{tag}.zip")
+    zipfile.ZipFile(f"{TMP}/{tag}.zip").extractall(f"{TMP}/{tag}")
+    return next(d for d, dirs, files in os.walk(f"{TMP}/{tag}") if "modules.json" in files)
+
 def measure(name, source):
     # A measure that fails (an export check, an evaluation) must not cost the stage its training: logged, not fatal
     try:
@@ -170,6 +179,11 @@ elif STAGE == "pool":
     # A model by its name; "asym:<teacher>" ranks by the student's queries against the teacher's lines (pool_rank.py
     # --doc-source), as an index embedded by the teacher would, the app still running the student
     stages = {"teacher": "train", "student": "distill", "tuned": "tune"}
+    # --model-release: "student" is a model released here (student 2 is no stage's output any more), not distill's
+    released = release_model(OPTIONS["model_release"]) if OPTIONS.get("model_release") else None
+
+    def source_of(name):
+        return released if name == "student" and released else find_input(stages[name], name)
     runs = {}
     for name in OPTIONS["models"].split(","):
         try:
@@ -179,11 +193,14 @@ elif STAGE == "pool":
                 doc = name.split(":", 1)[1]
                 runs[f"asym-{doc}"] = (f"--source {find_input('distill', 'student')} "
                                        f"--doc-source {find_input(stages[doc], doc)} --proj-out {OUT}/ranks-proj-{doc}.json")
-            elif "@" in name:  # "student@merge": the model, its short lines embedded otherwise (pool_rank.py)
+            elif "@" in name:  # "student@merge+strip": the model, its lines embedded otherwise (pool_rank.py)
                 model, mode = name.split("@", 1)
-                runs[f"{model}-{mode}"] = f"--source {find_input(stages[model], model)} --short-context {mode}"
+                parts = mode.split("+")
+                context = next((x for x in parts if x != "strip"), None)
+                flags = (f" --short-context {context}" if context else "") + (" --strip-number" if "strip" in parts else "")
+                runs[f"{model}-{mode.replace('+', '-')}"] = f"--source {source_of(model)}{flags}"
             else:
-                runs[name] = f"--source {find_input(stages[name], name)}"
+                runs[name] = f"--source {source_of(name)}"
         except SystemExit as e:
             print(f"Not ranked: {name}: {e}", flush=True)
     spec = find_data("pool.json")
@@ -201,16 +218,11 @@ elif STAGE == "pool":
 elif STAGE == "patch":
     # The library's lines that merging the short lines changes (embed_corpus.py --short-merge --changed-only), embedded
     # with a model released by this repository, as int8: an index's other vectors are kept (merge_vectors.py)
-    import urllib.request, zipfile
-    tag = OPTIONS["model_release"]
-    url = f"https://github.com/efrul/pardes-semantic/releases/download/{tag}/{tag}.zip"
-    print(f"$ download {url}", flush=True)
-    urllib.request.urlretrieve(url, f"{TMP}/model.zip")
-    zipfile.ZipFile(f"{TMP}/model.zip").extractall(f"{TMP}/model")
-    source = next(d for d, dirs, files in os.walk(f"{TMP}/model") if "modules.json" in files)
+    source = release_model(OPTIONS["model_release"])
     sh(f"python fetch_library.py --out {TMP}/library --release {OPTIONS['release']}")
+    strip = "--strip-number" if OPTIONS.get("strip_number") else ""
     sh(f"python embed_corpus.py --db {TMP}/library/seforim.db --backend torch --device cuda --dtype float16 "
-       f"--source {source} --short-merge {OPTIONS['short_merge']} --changed-only --out {TMP}/vectors-patch")
+       f"--source {source} --short-merge {OPTIONS['short_merge']} {strip} --changed-only --out {TMP}/vectors-patch")
     sh(f"python quantize_vectors.py --vectors {TMP}/vectors-patch --out {OUT}/vectors-patch-int8")
     sh(f"cp {TMP}/vectors-patch/short-ids.i64 {OUT}/vectors-patch-int8/")
 elif STAGE == "int8":
@@ -311,7 +323,8 @@ def push(stage: str, opts: argparse.Namespace) -> None:
     options = {"hours": opts.hours, "pairs": opts.pairs, "batch": opts.batch, "texts": opts.texts, "distill_batch": opts.distill_batch,
                "chosen": opts.chosen, "weight": opts.weight, "release": opts.release, "links": opts.links,
                "repeat": opts.repeat, "teacher": opts.teacher, "models": opts.models,
-               "rank": opts.rank, "model_release": opts.model_release, "short_merge": opts.short_merge, "more": [f.name for f in opts.more] if stage in ("tune", "distill") else []}
+               "rank": opts.rank, "model_release": opts.model_release, "short_merge": opts.short_merge,
+               "strip_number": opts.strip_number, "more": [f.name for f in opts.more] if stage in ("tune", "distill") else []}
     data = {}
     if stage == "tune":
         if not opts.questions:
@@ -406,7 +419,11 @@ def main() -> None:
     ap.add_argument("--distill-batch", type=int, default=32,
                     help="distill: batch per GPU (128 ran out of memory on a 16 GB T4)")
     ap.add_argument("--chosen", choices=("base", "teacher", "student"), default="student", help="embed: the model")
-    ap.add_argument("--model-release", help="patch: the release tag of the model here (its <tag>.zip), e.g. student-695cbe2")
+    ap.add_argument("--model-release",
+                    help="patch, pool: the release tag of a model here (its <tag>.zip), e.g. student-695cbe2; pool ranks "
+                         "by it as \"student\"")
+    ap.add_argument("--strip-number", action="store_true",
+                    help="patch: a line's number in parentheses at its start left out too (embed_corpus.py)")
     ap.add_argument("--short-merge", type=int, default=8,
                     help="patch: lines of this many words or fewer merged into the next (embed_corpus.py)")
     ap.add_argument("--weight", type=float, default=3.0,
