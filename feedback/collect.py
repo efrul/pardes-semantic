@@ -11,7 +11,9 @@ own (the senders' searches stay apart, and a query is on the same side of the ev
 
 The searches are the users' and the lines' text the library's, so everything is written outside the repository:
 - queries.tsv: qid, query, its scope (categoryId, bookId, tocId, extended), the model it ran with, when it was graded,
-  and its sender (the first letters of the package's sender id, "local" for --settings);
+  its sender (the first letters of the package's sender id, "local" for --settings), and the app it was graded in when
+  not Pardes (source). Another app's result has none of the library's ids: it is placed by its book and reference
+  (place_results), and left out when they name no line of this library, or more than one;
 - grades.tsv: qid, lineId, grade (3 exactly this, 2 relevant, 0 not relevant), rank (the result's place, from 0);
 - searches.json: each search with its graded lines as candidates (../eval-passages/rank.py, and its judged.py's way of
   scoring), the searches of the evaluation only (--eval-share of them, picked by their key, so a search stays where it
@@ -22,7 +24,8 @@ The searches are the users' and the lines' text the library's, so everything is 
   out: the benchmark's books and Rambam halachot, crfh1672's tractates and a copy of their lines, the lines the
   evaluations judge or target and their neighbors, the dev questions' targets and theirs, a quote's source.
 - history.tsv: the searches made, of the packages that hold them (their senders chose to send them) and of --settings:
-  sender, query, scope, how many times, when last;
+  sender, query, scope, how many times, when last, and for a search made in another app (the app sends Zayit's and
+  Otzaria's too, when its user says so) which app, where it searched as that app says it, and its own title for it;
 - daf/<Tractate>.json: the daf view's line review of the packages, in its own format (the app's pardes-daf/feedback/,
   pardes-rashi-ocr's feedback.py reads it), one file a tractate, each line's newest mark of any sender. A review whose
   tractate is not a plain name, as the app names its layouts (BavaBatra), is left out: it would name a file elsewhere.
@@ -61,6 +64,8 @@ COLUMNS = ("searchKey", "query", "lineId", "bookId", "grade", "rank", "searchCat
 LOCAL = "local"  # the sender of --settings' grades
 TRACTATE = re.compile(r"[A-Za-z]+")  # a tractate as the app names its layout file; a package's goes into a file name
 HISTORY = ("query", "categoryId", "bookId", "tocId", "extended", "count", "lastAt")
+# A search made in another app: which (zayit, otzaria), where it searched as that app says it, and its title for it
+ELSEWHERE = ("source", "scope", "ref")
 
 
 def read_feedback(settings: Path) -> tuple[list[dict], list[dict]]:
@@ -105,10 +110,30 @@ def read_packages(paths: list[Path]) -> tuple[list[dict], list[dict], list[tuple
                            "grade": g["grade"], "rank": g["rank"], "searchCategoryId": g.get("categoryId"),
                            "searchBookId": g.get("scopeBookId"), "searchTocId": g.get("tocId"),
                            "searchExtended": int(bool(g.get("extended"))), "model": g.get("model"),
-                           "gradedAt": g["gradedAt"], "sender": sender})
-        history += [{**{k: h.get(k) for k in HISTORY}, "sender": sender} for h in package.get("searches", [])]
+                           "gradedAt": g["gradedAt"], "sender": sender, "source": g.get("source"),
+                           "bookTitle": g.get("bookTitle"), "heRef": g.get("heRef")})
+        history += [{**{k: h.get(k) for k in HISTORY + ELSEWHERE}, "sender": sender} for h in package.get("searches", [])]
         daf += [(sender, review) for review in package.get("daf", [])]
     return grades, history, daf, senders
+
+
+def place_results(con: sqlite3.Connection, grades: list[dict]) -> tuple[list[dict], int]:
+    """The grades with every result of another app placed in the library: such a result carries none of the library's
+    ids (lineId 0), only its book's title and its reference as that app says them. One whose title and reference name
+    one line of this library takes that line's ids; the others are left out, and counted."""
+    placed, left_out = [], 0
+    for g in grades:
+        if g["lineId"]:
+            placed.append(g)
+            continue
+        lines = con.execute(
+            "SELECT id, bookId FROM line WHERE heRef = ? AND bookId IN (SELECT id FROM book WHERE title = ?) LIMIT 2",
+            (g.get("heRef"), g.get("bookTitle"))).fetchall() if g.get("heRef") and g.get("bookTitle") else []
+        if len(lines) == 1:
+            placed.append({**g, "lineId": lines[0][0], "bookId": lines[0][1]})
+        else:
+            left_out += 1
+    return placed, left_out
 
 
 def newest(rows: list[dict], key, time: str) -> list[dict]:
@@ -179,19 +204,24 @@ def main() -> None:
     grades, sent, daf, senders = read_packages(args.packages)
     if args.packages:
         print(f"{sum(senders.values())} packages from {len(senders)} senders")
+    con = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
+    grades, unplaced = place_results(con, grades)
+    if unplaced:
+        print(f"{unplaced} grades of other apps left out: their book and reference name no one line of this library")
     rows = newest(rows + grades, key=lambda r: (r["sender"], r["searchKey"], r["lineId"]), time="gradedAt")
-    history = newest(history + sent, key=lambda h: (h["sender"],) + tuple(h[k] for k in HISTORY[:5]), time="lastAt")
+    # A search made in each app, and in each of its scopes, counts apart
+    history = newest(history + sent, time="lastAt",
+                     key=lambda h: (h["sender"],) + tuple(h[k] for k in HISTORY[:5]) + tuple(h.get(k) for k in ELSEWHERE))
     args.out.mkdir(parents=True, exist_ok=True)
     write_history(history, args.out)
     write_daf(daf, args.out)
     if not rows:
         sys.exit("No grades yet.")
-    con = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
     searches = {}
     for r in rows:
         s = searches.setdefault((r["sender"], r["searchKey"]), {
             **{k: r[k] for k in COLUMNS if k not in ("lineId", "bookId", "grade", "rank")}, "sender": r["sender"],
-            "lines": {}})
+            "source": r.get("source"), "lines": {}})
         s["lines"][r["lineId"]] = (r["grade"], r["rank"])
         s["gradedAt"] = max(s["gradedAt"], r["gradedAt"])
     lines = {}
@@ -210,7 +240,7 @@ def main() -> None:
             (args.out / "grades.tsv").open("w", encoding="utf-8", newline="") as gf:
         qw, gw = csv.writer(qf, delimiter="\t"), csv.writer(gf, delimiter="\t")
         qw.writerow(["qid", "query", "categoryId", "bookId", "tocId", "extended", "model", "gradedAt", "split",
-                     "sender"])
+                     "sender", "source"])
         gw.writerow(["qid", "lineId", "grade", "rank"])
         for (sender, key), s in sorted(searches.items(), key=lambda kv: kv[1]["gradedAt"]):
             qid = qid_of(key, sender)
@@ -218,7 +248,7 @@ def main() -> None:
             evaluation = in_evaluation(key, args.eval_share)
             qw.writerow([qid, s["query"], s["searchCategoryId"] or "", s["searchBookId"] or "", s["searchTocId"] or "",
                          int(bool(s["searchExtended"])), s["model"] or "", s["gradedAt"],
-                         "eval" if evaluation else "train", sender_of(sender)])
+                         "eval" if evaluation else "train", sender_of(sender), s["source"] or ""])
             for lid, (grade, rank) in sorted(s["lines"].items(), key=lambda kv: kv[1][1]):
                 gw.writerow([qid, lid, grade, rank])
             if evaluation:
@@ -262,10 +292,10 @@ def write_history(history: list[dict], out: Path) -> None:
         return
     with (out / "history.tsv").open("w", encoding="utf-8", newline="") as f:
         w = csv.writer(f, delimiter="\t")
-        w.writerow(["sender"] + list(HISTORY))
+        w.writerow(["sender"] + list(HISTORY + ELSEWHERE))
         for h in history:
-            w.writerow([sender_of(h["sender"])] + ["" if h[k] is None else int(h[k]) if k == "extended" else h[k]
-                                                   for k in HISTORY])
+            w.writerow([sender_of(h["sender"])]
+                       + ["" if h.get(k) is None else int(h[k]) if k == "extended" else h[k] for k in HISTORY + ELSEWHERE])
     queries = Counter(" ".join(h["query"].split()) for h in history)
     short = sum(1 for q in queries if len(q.split()) <= SHORT_QUERY_WORDS)
     print(f"{len(history)} searches made, {len(queries)} queries, {short} ({short / len(queries):.0%}) of up to "
