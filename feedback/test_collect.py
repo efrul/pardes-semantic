@@ -1,5 +1,5 @@
 """collect.py's write_daf against packages whose tractate is not a plain name, which must not name a file elsewhere,
-and what it makes of the searches and the grades of other apps that a package may hold:
+what it makes of the searches and the grades of other apps that a package may hold, and the rows it keeps once:
 
     python feedback/test_collect.py      (or pytest)
 """
@@ -108,6 +108,28 @@ def test_a_result_of_another_app_is_placed_by_its_book_and_reference():
     # reference of two lines, of none, a result without its book, and a book this library lacks
     assert [(g["lineId"], g["bookId"]) for g in placed] == [(5, 1), (70, 7)]
     assert left_out == 4
+
+
+def test_a_row_two_computers_sent_is_kept_once_and_two_results_of_another_app_stay_two():
+    def grade(**more):
+        return {"search": "k", "query": "q", "lineId": 5, "bookId": 1, "grade": 2, "rank": 1, "gradedAt": 100, **more}
+
+    def vote(ref):
+        return grade(lineId=0, bookId=0, source="otzaria", bookTitle="A", heRef=ref)
+
+    other = "99999999-2222-3333-4444-555555555555"
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        # As the service gives its packages to the maintainer: many in one file, each with its sender
+        bundle = {"packages": [
+            {"sender": SENDER, "receivedAt": 1, "package": package(grades=[grade(), vote("A 1"), vote("A 2")])},
+            {"sender": other, "receivedAt": 2, "package": {**package(grades=[grade(), vote("A 1")]), "sender": other}},
+        ]}
+        (root / "pardes-feedback-2026-11-11.json").write_text(json.dumps(bundle), "utf-8")
+        grades, _, _, senders = read_packages([root])
+    assert senders == {SENDER: 1, other: 1}
+    # The synced copy of each row is dropped; two results that differ by their reference alone are two
+    assert [(g["lineId"], g["heRef"]) for g in grades] == [(5, None), (0, "A 1"), (0, "A 2")]
 
 
 if __name__ == "__main__":
