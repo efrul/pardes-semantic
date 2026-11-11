@@ -39,7 +39,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 BUILD = HERE / "build" / "kaggle"
-STAGES = ("train", "tune", "distill", "embed", "int8", "pool")
+STAGES = ("train", "tune", "distill", "embed", "int8", "pool", "patch")
 CODE = ["*.py", "pardes_semantic/*.py", "NOTICE.md"]
 
 # The script Kaggle runs: unpacks the code, installs what Kaggle's image lacks, runs the stage
@@ -83,6 +83,15 @@ def find_input(stage, name):
             if os.path.basename(d) == name and f"pardes-semantic-{stage}" in d:
                 return d
     raise SystemExit(f"No {name} in the output of the {stage} stage: attach it (kernel_sources)")
+
+def release_model(tag):
+    # A model released by this repository (its <tag>.zip), unpacked: the folder that holds its modules.json
+    import urllib.request, zipfile
+    url = f"https://github.com/efrul/pardes-semantic/releases/download/{tag}/{tag}.zip"
+    print(f"$ download {url}", flush=True)
+    urllib.request.urlretrieve(url, f"{TMP}/{tag}.zip")
+    zipfile.ZipFile(f"{TMP}/{tag}.zip").extractall(f"{TMP}/{tag}")
+    return next(d for d, dirs, files in os.walk(f"{TMP}/{tag}") if "modules.json" in files)
 
 def measure(name, source):
     # A measure that fails (an export check, an evaluation) must not cost the stage its training: logged, not fatal
@@ -130,8 +139,16 @@ elif STAGE == "distill":
     teacher = find_input("tune", "tuned") if OPTIONS["teacher"] == "tuned" else find_input("train", "teacher")
     pairs = os.path.join(find_input("train", "train"), "pairs.jsonl")
     queries = f"--queries {find_data('queries.txt')}" if find_data("queries.txt") else ""
-    sh(f"python distill_model.py --teacher {teacher} --pairs {pairs} {queries} --out {OUT}/student --texts {OPTIONS['texts']} --batch-size {OPTIONS['distill_batch']} "
-       f"--deadline {DEADLINE - 1800}")
+    if OPTIONS.get("rank"):
+        # The teacher's order too, on pairs (distill_rank.py): the links' first --links and the stage's --more pairs
+        more = " ".join(f"--more-pairs {find_data(name)}" for name in OPTIONS["more"])
+        given = find_data("teacher-embeddings.npy")
+        given = f"--teacher-embeddings {given}" if given else ""
+        sh(f"python distill_rank.py --teacher {teacher} --pairs {pairs} --links {OPTIONS['links']} {more} {queries} "
+           f"{given} --out {OUT}/student --deadline {DEADLINE - 1800}")
+    else:
+        sh(f"python distill_model.py --teacher {teacher} --pairs {pairs} {queries} --out {OUT}/student --texts {OPTIONS['texts']} --batch-size {OPTIONS['distill_batch']} "
+           f"--deadline {DEADLINE - 1800}")
     sh(f"rm -rf {OUT}/student/checkpoints {OUT}/student/teacher-embeddings.npy")
     measure("student", f"{OUT}/student")
 elif STAGE == "embed":
@@ -159,21 +176,55 @@ elif STAGE == "pool":
     # The evaluations' searches, their candidates ranked by each model attached and the base one (eval-pool/README.md):
     # the release is the one the evaluations ran on, as the candidates are its line ids
     sh(f"python fetch_library.py --out {TMP}/library --release {OPTIONS['release']}")
-    wanted = OPTIONS["models"].split(",")
-    models = {"base": None} if "base" in wanted else {}
-    for stage, name in (("train", "teacher"), ("distill", "student"), ("tune", "tuned")):
-        if name not in wanted:
+    # A model by its name; "asym:<teacher>" ranks by the student's queries against the teacher's lines (pool_rank.py
+    # --doc-source), as an index embedded by the teacher would, the app still running the student
+    stages = {"teacher": "train", "student": "distill", "tuned": "tune"}
+    # --model-release: "student" is a model released here (student 2 is no stage's output any more), not distill's
+    released = release_model(OPTIONS["model_release"]) if OPTIONS.get("model_release") else None
+
+    def source_of(name):
+        return released if name == "student" and released else find_input(stages[name], name)
+    runs = {}
+    for name in OPTIONS["models"].split(","):
+        try:
+            if name == "base":
+                runs["base"] = ""
+            elif name.startswith("asym:"):
+                doc = name.split(":", 1)[1]
+                runs[f"asym-{doc}"] = (f"--source {find_input('distill', 'student')} "
+                                       f"--doc-source {find_input(stages[doc], doc)} --proj-out {OUT}/ranks-proj-{doc}.json")
+            elif "@" in name:  # "student@merge+strip": the model, its lines embedded otherwise (pool_rank.py)
+                model, mode = name.split("@", 1)
+                parts = mode.split("+")
+                context = next((x for x in parts if x != "strip"), None)
+                flags = (f" --short-context {context}" if context else "") + (" --strip-number" if "strip" in parts else "")
+                runs[f"{model}-{mode.replace('+', '-')}"] = f"--source {source_of(model)}{flags}"
+            else:
+                runs[name] = f"--source {source_of(name)}"
+        except SystemExit as e:
+            print(f"Not ranked: {name}: {e}", flush=True)
+    spec = find_data("pool.json")
+    if not spec:
+        raise SystemExit("No pool.json: attach the stage's private dataset")
+    for name, src in runs.items():
+        # The stage's --hours bound it, as the weekly quota's check counts on them: no model is begun in its last half hour
+        if time.time() > DEADLINE - 1800:
+            print(f"Not ranked: {name}, the stage's --hours are spent", flush=True)
             continue
         try:
-            models[name] = find_input(stage, name)
-        except SystemExit as e:
-            print(f"Not ranked: {e}", flush=True)
-    for name, source in models.items():
-        src = f"--source {source}" if source else ""
-        try:
-            sh(f"python pool_rank.py --db {TMP}/library/seforim.db --spec data/pool.json {src} --out {OUT}/ranks-{name}.json")
+            sh(f"python pool_rank.py --db {TMP}/library/seforim.db --spec {spec} {src} --out {OUT}/ranks-{name}.json")
         except subprocess.CalledProcessError as e:
             print(f"RANK {name} FAILED: {e}", flush=True)
+elif STAGE == "patch":
+    # The library's lines that merging the short lines changes (embed_corpus.py --short-merge --changed-only), embedded
+    # with a model released by this repository, as int8: an index's other vectors are kept (merge_vectors.py)
+    source = release_model(OPTIONS["model_release"])
+    sh(f"python fetch_library.py --out {TMP}/library --release {OPTIONS['release']}")
+    strip = "--strip-number" if OPTIONS.get("strip_number") else ""
+    sh(f"python embed_corpus.py --db {TMP}/library/seforim.db --backend torch --device cuda --dtype float16 "
+       f"--source {source} --short-merge {OPTIONS['short_merge']} {strip} --changed-only --out {TMP}/vectors-patch")
+    sh(f"python quantize_vectors.py --vectors {TMP}/vectors-patch --out {OUT}/vectors-patch-int8")
+    sh(f"cp {TMP}/vectors-patch/short-ids.i64 {OUT}/vectors-patch-int8/")
 elif STAGE == "int8":
     # The download: the vectors as the index stores them (2.2 GB for the library, not 8.8), and the query model
     vectors = find_input("embed", "vectors")
@@ -234,18 +285,46 @@ def upload(stage: str, files: dict[str, Path], dry_run: bool) -> str:
         kaggle("datasets", "version", "-p", str(d), "-m", f"{stage} {time.strftime('%Y-%m-%d %H:%M')}")
     else:
         kaggle("datasets", "create", "-p", str(d))
-    for _ in range(60):
+    for _ in range(180):  # a teacher's embeddings (1.45 GB) take Kaggle longer than the searches
         time.sleep(10)
         if "ready" in kaggle("datasets", "status", ds, capture=True):
             return ds
-    sys.exit(f"{ds} is not ready after 10 min")
+    sys.exit(f"{ds} is not ready after 30 min")
+
+
+def quota_left(cap: float) -> tuple[float, float, float, float, str]:
+    """The GPU hours left under [cap] of the account's weekly quota, with the hours used, those held by running sessions
+    (any of the account's, not only these stages'), the quota and when it renews."""
+    from datetime import timedelta
+
+    from kaggle import api
+
+    r = api.quota_view()
+    q = r.gpu_quota
+    hours = lambda t: (t or timedelta()).total_seconds() / 3600  # noqa: E731
+    used, held, total = hours(q.time_used), hours(q.time_reserved), hours(q.total_time_allowed)
+    return cap * total - used - held, used, held, total, f"{r.quota_refresh_time} UTC"
+
+
+def check_quota(stage: str, opts: argparse.Namespace) -> None:
+    """Refuses a stage whose --hours would take the week's GPU use past --quota-cap of the quota: the stages that train
+    stop by their --hours (and pool ranks no model after them), so a stage that fits is a stage that ends in time."""
+    left, used, held, total, renews = quota_left(opts.quota_cap)
+    print(f"GPU quota: {used:.1f} h used, {held:.1f} h held by running sessions, of {total:.1f} h; {left:.1f} h left "
+          f"under {opts.quota_cap:.0%}")
+    if opts.hours > left:
+        sys.exit(f"Not pushed: {stage} with --hours {opts.hours:g} would pass {opts.quota_cap:.0%} of the weekly GPU "
+                 f"quota ({left:.1f} h left). Give it fewer --hours, or wait for the quota to renew ({renews}).")
 
 
 def push(stage: str, opts: argparse.Namespace) -> None:
+    if not opts.dry_run and stage != "int8":
+        check_quota(stage, opts)
     options = {"hours": opts.hours, "pairs": opts.pairs, "batch": opts.batch, "texts": opts.texts, "distill_batch": opts.distill_batch,
                "chosen": opts.chosen, "weight": opts.weight, "release": opts.release, "links": opts.links,
                "repeat": opts.repeat, "teacher": opts.teacher, "models": opts.models,
-               "more": [f.name for f in opts.more] if stage == "tune" else []}
+               "rank": opts.rank, "model_release": opts.model_release, "short_merge": opts.short_merge,
+               "strip_number": opts.strip_number, "more": [f.name for f in opts.more] if stage in ("tune", "distill") else []}
     data = {}
     if stage == "tune":
         if not opts.questions:
@@ -255,13 +334,21 @@ def push(stage: str, opts: argparse.Namespace) -> None:
     if stage == "tune" and opts.more:
         # Chavruta's pairs and the like are megabytes: they travel as a private dataset, as distill's searches do
         datasets.append(upload(stage, {f.name: f for f in opts.more}, opts.dry_run))
-    if stage == "distill" and opts.queries:
-        # 145k searches make a script of 2.5 MB, which Kaggle refuses: they travel as a private dataset
-        datasets.append(upload(stage, {"queries.txt": opts.queries}, opts.dry_run))
+    if stage == "distill" and (opts.queries or opts.more or opts.teacher_embeddings):
+        # 145k searches make a script of 2.5 MB, which Kaggle refuses: they travel as a private dataset, with --rank's pairs
+        files = {"queries.txt": opts.queries} if opts.queries else {}
+        files |= {f.name: f for f in opts.more}
+        if opts.teacher_embeddings:
+            files["teacher-embeddings.npy"] = opts.teacher_embeddings
+        datasets.append(upload(stage, files, opts.dry_run))
+    if stage == "patch" and not (opts.model_release and opts.release):
+        sys.exit("patch needs --model-release (a model's release tag here, e.g. student-695cbe2) and --release")
     if stage == "pool":
         if not opts.spec or not opts.release:
             sys.exit("pool needs --spec (eval-pool/pool_spec.py's json) and --release (the evaluations' release)")
-        data["data/pool.json"] = opts.spec
+        # With crfh1672's 422 searches and the feedback's the script was 1,065 KB, which Kaggle refuses (400; 961 KB
+        # passed): the searches travel as a private dataset, as distill's do
+        datasets.append(upload(stage, {"pool.json": opts.spec}, opts.dry_run))
     script = TEMPLATE.replace("__STAGE__", repr(stage)).replace("__OPTIONS__", repr(json.dumps(options))) \
         .replace("__BUNDLE__", repr(bundle(data)))
     d = BUILD / stage
@@ -270,7 +357,7 @@ def push(stage: str, opts: argparse.Namespace) -> None:
     sources = {"train": [], "tune": [slug("train")],
                "distill": [slug("train")] + ([slug("tune")] if opts.teacher == "tuned" else []),
                "embed": [slug("train"), slug("distill")], "int8": [slug("embed")],
-               "pool": [slug("train"), slug("distill"), slug("tune")]}[stage]
+               "pool": [slug("train"), slug("distill"), slug("tune")], "patch": []}[stage]
     meta = {
         "id": slug(stage), "title": f"pardes-semantic-{stage}", "code_file": "run.py", "language": "python",
         "kernel_type": "script", "is_private": True, "enable_gpu": stage != "int8", "enable_internet": True,
@@ -305,23 +392,40 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("action", choices=("push", "status", "wait", "output"))
     ap.add_argument("stage", choices=STAGES)
-    ap.add_argument("--hours", type=float, default=8.0, help="the stage's time budget (sessions: 9-12 h)")
+    ap.add_argument("--hours", type=float, default=8.0,
+                    help="the stage's time budget (sessions: 9-12 h): train, tune, distill and pool stop by it; for embed "
+                         "it is only what the quota's check counts")
+    ap.add_argument("--quota-cap", type=float, default=1.0,
+                    help="push: refuse a stage whose --hours would take the week's GPU use past this share of the quota "
+                         "(a stage the quota cuts off loses its output)")
     ap.add_argument("--pairs", type=int, default=150_000, help="train: training pairs")
     ap.add_argument("--batch", type=int, default=128, help="train: batch size (128 fits 16 GB)")
     ap.add_argument("--questions", type=Path, help="tune: train-v2/build_pairs.py's questions (--hold-benchmark)")
     ap.add_argument("--repeat", type=int, default=10, help="tune: each question this many times")
     ap.add_argument("--links", type=int, default=20_000, help="tune: the first N of train's pairs, with the questions")
     ap.add_argument("--more", type=Path, action="append", default=[],
-                    help="tune: more pairs (build_chavruta_pairs.py's jsonl), as they are; repeatable")
+                    help="tune, distill --rank: more pairs (build_chavruta_pairs.py's jsonl), as they are; repeatable")
     ap.add_argument("--spec", type=Path, help="pool: eval-pool/pool_spec.py's searches")
     ap.add_argument("--models", default="base,teacher,student,tuned", help="pool: the models to rank by")
     ap.add_argument("--texts", type=int, default=300_000, help="distill: texts of train's pairs")
     ap.add_argument("--teacher", choices=("teacher", "tuned"), default="teacher",
                     help="distill: train's teacher, or tune's (train's on the training questions)")
     ap.add_argument("--queries", type=Path, help="distill: build_distill_queries.py's searches, distilled on too")
+    ap.add_argument("--teacher-embeddings", type=Path,
+                    help="distill --rank: an earlier run's teacher-embeddings.npy of the same inputs, not computed again")
+    ap.add_argument("--rank", action="store_true",
+                    help="distill: learn the teacher's order on pairs too (distill_rank.py: --links of train's pairs and "
+                         "the --more pairs)")
     ap.add_argument("--distill-batch", type=int, default=32,
                     help="distill: batch per GPU (128 ran out of memory on a 16 GB T4)")
     ap.add_argument("--chosen", choices=("base", "teacher", "student"), default="student", help="embed: the model")
+    ap.add_argument("--model-release",
+                    help="patch, pool: the release tag of a model here (its <tag>.zip), e.g. student-695cbe2; pool ranks "
+                         "by it as \"student\"")
+    ap.add_argument("--strip-number", action="store_true",
+                    help="patch: a line's number in parentheses at its start left out too (embed_corpus.py)")
+    ap.add_argument("--short-merge", type=int, default=8,
+                    help="patch: lines of this many words or fewer merged into the next (embed_corpus.py)")
     ap.add_argument("--weight", type=float, default=3.0,
                     help="embed: the model's hybridDenseWeight (3: the fine-tuned model's best, BENCHMARK.md)")
     ap.add_argument("--release", help="embed: the SeforimLibrary release tag (default: the latest when the stage runs); "

@@ -5,9 +5,11 @@ files, or folders of them), or both:
 
     python collect.py --settings user_settings.db --db seforim.db --out build/feedback [--eval-share 0.2]
     python collect.py --packages inbox/ --db seforim.db --out build/feedback
+    python collect.py --packages pardes-feedback-2026-11-07.json --db seforim.db --out build/feedback   # the admin page's download
 
 A package holds what was new since its sender's previous one; a line graded again keeps its newest grade, each sender's
-own (the senders' searches stay apart, and a query is on the same side of the evaluation for all of them).
+own (the senders' searches stay apart, and a query is on the same side of the evaluation for all of them). A grade or a
+search two senders sent alike counts once: one user database, synced to two computers, is sent under two sender ids.
 
 The searches are the users' and the lines' text the library's, so everything is written outside the repository:
 - queries.tsv: qid, query, its scope (categoryId, bookId, tocId, extended), the model it ran with, when it was graded,
@@ -85,29 +87,60 @@ def package_files(paths: list[Path]) -> list[Path]:
     return files
 
 
+def packages_of(file: Path) -> list[dict]:
+    """The packages in [file]: one package as the app sends it, or many as the service gives them to the maintainer (the
+    admin page's download, pardes-feedback-<date>.json, and GET /v1/packages?bodies=1: {"packages": [{"sender",
+    "receivedAt", "package"}], "deletions": [{"sender", "deletedAt"}]}), without those a sender had deleted, as fetch.py
+    leaves them out of the inbox."""
+    data = json.loads(file.read_text("utf-8"))
+    if not (isinstance(data, dict) and isinstance(data.get("packages"), list)):
+        return [data]
+    deleted = {}
+    for d in data.get("deletions") or []:
+        deleted[d["sender"]] = max(deleted.get(d["sender"], 0), d["deletedAt"])
+    return [p["package"] for p in data["packages"]
+            if isinstance(p.get("package"), dict) and p.get("receivedAt", 0) > deleted.get(p.get("sender"), -1)]
+
+
+def once(rows: list[dict], fields: tuple[str, ...]) -> list[dict]:
+    """[rows] without the copies another sender sent of the same row: the user database is synced between computers
+    (Google Drive), and each computer sends it under its own sender id, so the same grades came twice."""
+    seen, kept = set(), []
+    for row in rows:
+        key = tuple(row.get(f) for f in fields)
+        if key not in seen:
+            seen.add(key)
+            kept.append(row)
+    return kept
+
+
 def read_packages(paths: list[Path]) -> tuple[list[dict], list[dict], list[tuple[str, dict]], Counter]:
     """The grades, the searches and the daf reviews of the packages in [paths], each with its sender, and how many
     packages each sender sent."""
     grades, history, daf, senders = [], [], [], Counter()
     for file in package_files(paths):
         try:
-            package = json.loads(file.read_text("utf-8"))
-        except (OSError, ValueError) as e:
+            packages = packages_of(file)
+        except (OSError, ValueError, KeyError, TypeError) as e:
             print(f"{file}: not read ({e})", file=sys.stderr)
             continue
-        if package.get("app") != "Pardes" or package.get("format") != 1 or not package.get("sender"):
-            print(f"{file}: not a feedback package of Pardes (format 1)", file=sys.stderr)
-            continue
-        sender = package["sender"]
-        senders[sender] += 1
-        for g in package.get("grades", []):
-            grades.append({"searchKey": g["search"], "query": g["query"], "lineId": g["lineId"], "bookId": g["bookId"],
-                           "grade": g["grade"], "rank": g["rank"], "searchCategoryId": g.get("categoryId"),
-                           "searchBookId": g.get("scopeBookId"), "searchTocId": g.get("tocId"),
-                           "searchExtended": int(bool(g.get("extended"))), "model": g.get("model"),
-                           "gradedAt": g["gradedAt"], "sender": sender})
-        history += [{**{k: h.get(k) for k in HISTORY}, "sender": sender} for h in package.get("searches", [])]
-        daf += [(sender, review) for review in package.get("daf", [])]
+        for package in packages:
+            if not isinstance(package, dict) or package.get("app") != "Pardes" or package.get("format") != 1 \
+                    or not package.get("sender"):
+                print(f"{file}: not a feedback package of Pardes (format 1)", file=sys.stderr)
+                continue
+            sender = package["sender"]
+            senders[sender] += 1
+            for g in package.get("grades", []):
+                grades.append({"searchKey": g["search"], "query": g["query"], "lineId": g["lineId"],
+                               "bookId": g["bookId"], "grade": g["grade"], "rank": g["rank"],
+                               "searchCategoryId": g.get("categoryId"), "searchBookId": g.get("scopeBookId"),
+                               "searchTocId": g.get("tocId"), "searchExtended": int(bool(g.get("extended"))),
+                               "model": g.get("model"), "gradedAt": g["gradedAt"], "sender": sender})
+            history += [{**{k: h.get(k) for k in HISTORY}, "sender": sender} for h in package.get("searches", [])]
+            daf += [(sender, review) for review in package.get("daf", [])]
+    grades = once(grades, ("searchKey", "lineId", "grade", "gradedAt"))
+    history = once(history, HISTORY)
     return grades, history, daf, senders
 
 
