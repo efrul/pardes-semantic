@@ -28,3 +28,4 @@ jobs:
         run: |
           python eval-passages/test_passages.py
           python test_release_model.py
+          python feedback/test_collect.py

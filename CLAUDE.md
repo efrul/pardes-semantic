@@ -26,6 +26,7 @@ changing the model.
 pip install -r requirements.txt          # CPU torch; the CUDA wheel only for embedding the library
 python eval-passages/test_passages.py    # the tests tests.yml runs on every push
 python test_release_model.py
+python feedback/test_collect.py
 git submodule update --init pardes       # Pardes, only for search-order/build.sh, eval-100/harness, the fixtures
 git -C pardes submodule update --init SeforimLibrary   # what build.sh compiles against
 ```
