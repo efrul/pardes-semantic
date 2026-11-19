@@ -7,7 +7,8 @@
     python kaggle_run.py wait train                # until it ends (prints the status as it changes)
     python kaggle_run.py output train              # its reports and models into build/kaggle-output/train
     python kaggle_run.py push tune --questions build/train/questions.jsonl --hours 3   # train's teacher on the questions
-    #   (--more build/train/chavruta.jsonl: other pairs too, as a private dataset)
+    #   (--more build/train/chavruta.jsonl: other pairs too; --questions build/feedback/feedback.jsonl: the feedback's
+    #   searches as questions too; --negatives: their hard negatives too)
     python kaggle_run.py push pool --spec build/pool.json --release v3-20261012193827   # the models on the evaluations
     python kaggle_run.py push distill              # the 7-layer / 384-dim student of train's model, measured
     python kaggle_run.py push distill --teacher tuned --queries build/train/queries.txt   # of tune's, on searches too
@@ -17,8 +18,9 @@
 
 Each stage is a private Kaggle script kernel (`<user>/pardes-semantic-<stage>`, GPU and internet on). The code of this
 folder travels inside the kernel (a compressed bundle in the generated script), so Kaggle needs no access to the
-private repository; so do tune's questions (train-v2/build_pairs.py's jsonl, built here: the kernel then needs no
-library) and pool's searches (eval-pool/pool_spec.py's, line ids only). A stage reads the previous one's output
+private repository; tune's questions (train-v2/build_pairs.py's jsonl and the feedback's, built here: the kernel then
+needs no library) and pool's searches (eval-pool/pool_spec.py's, line ids only) travel as the stage's private dataset,
+since a script past ~1 MB is refused. A stage reads the previous one's output
 (kernel_sources: tune and distill read train's, distill tune's too with --teacher tuned, embed reads train's and
 distill's, int8 reads embed's, pool reads train's, distill's and tune's: it ranks the evaluations' candidates by each
 of their models and the base one, or by --models only),
@@ -127,9 +129,11 @@ elif STAGE == "tune":
         sh(f"cp -r {find_input('train', 'report-teacher')} {OUT}/")
     except (subprocess.CalledProcessError, SystemExit) as e:
         print(f"No report of train's teacher: {e}", flush=True)
+    questions = " ".join(f"--questions {find_data(name)}" for name in OPTIONS["questions"])
     more = " ".join(f"--more {find_data(name)}" for name in OPTIONS["more"])
+    negatives = "--negatives" if OPTIONS.get("negatives") else ""
     sh(f"python train_model.py --source {teacher} --pairs {pairs} --limit {OPTIONS['links']} "
-       f"--questions data/questions.jsonl --question-repeat {OPTIONS['repeat']} {more} --out {OUT}/tuned "
+       f"{questions} --question-repeat {OPTIONS['repeat']} {more} {negatives} --out {OUT}/tuned "
        f"--batch-size {OPTIONS['batch']} --mini-batch 16 --deadline {DEADLINE - 2700} --keep-checkpoints 1")
     sh(f"rm -rf {OUT}/tuned/checkpoints")
     measure("tuned", f"{OUT}/tuned")
@@ -324,16 +328,19 @@ def push(stage: str, opts: argparse.Namespace) -> None:
                "chosen": opts.chosen, "weight": opts.weight, "release": opts.release, "links": opts.links,
                "repeat": opts.repeat, "teacher": opts.teacher, "models": opts.models,
                "rank": opts.rank, "model_release": opts.model_release, "short_merge": opts.short_merge,
-               "strip_number": opts.strip_number, "more": [f.name for f in opts.more] if stage in ("tune", "distill") else []}
+               "strip_number": opts.strip_number, "more": [f.name for f in opts.more] if stage in ("tune", "distill") else [],
+               "questions": [f.name for f in opts.questions], "negatives": opts.negatives}
     data = {}
+    datasets = []
     if stage == "tune":
         if not opts.questions:
             sys.exit("tune needs --questions (train-v2/build_pairs.py's jsonl)")
-        data["data/questions.jsonl"] = opts.questions
-    datasets = []
-    if stage == "tune" and opts.more:
-        # Chavruta's pairs and the like are megabytes: they travel as a private dataset, as distill's searches do
-        datasets.append(upload(stage, {f.name: f for f in opts.more}, opts.dry_run))
+        # The questions with their negatives' texts (1 MB), Chavruta's pairs and the like: a private dataset, as
+        # distill's searches
+        files = {f.name: f for f in opts.questions + opts.more}
+        if len(files) < len(opts.questions) + len(opts.more):
+            sys.exit("tune: two of --questions and --more have the same file name, as the dataset would")
+        datasets.append(upload(stage, files, opts.dry_run))
     if stage == "distill" and (opts.queries or opts.more or opts.teacher_embeddings):
         # 145k searches make a script of 2.5 MB, which Kaggle refuses: they travel as a private dataset, with --rank's pairs
         files = {"queries.txt": opts.queries} if opts.queries else {}
@@ -400,8 +407,12 @@ def main() -> None:
                          "(a stage the quota cuts off loses its output)")
     ap.add_argument("--pairs", type=int, default=150_000, help="train: training pairs")
     ap.add_argument("--batch", type=int, default=128, help="train: batch size (128 fits 16 GB)")
-    ap.add_argument("--questions", type=Path, help="tune: train-v2/build_pairs.py's questions (--hold-benchmark)")
+    ap.add_argument("--questions", type=Path, action="append", default=[],
+                    help="tune: train-v2/build_pairs.py's questions (--hold-benchmark); repeatable, as feedback/collect.py's "
+                         "pairs are questions too")
     ap.add_argument("--repeat", type=int, default=10, help="tune: each question this many times")
+    ap.add_argument("--negatives", action="store_true",
+                    help="tune: the questions' hard negatives too (train_model.py --negatives)")
     ap.add_argument("--links", type=int, default=20_000, help="tune: the first N of train's pairs, with the questions")
     ap.add_argument("--more", type=Path, action="append", default=[],
                     help="tune, distill --rank: more pairs (build_chavruta_pairs.py's jsonl), as they are; repeatable")

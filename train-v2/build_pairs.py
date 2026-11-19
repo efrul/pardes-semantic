@@ -8,8 +8,9 @@ With --negatives, each pair also carries its question's hard negatives (mine_neg
 cleaned the same way, as "negatives": a list, short or empty for a question with fewer.
 
 Before writing, it checks that the evaluations stay clean, and stops when one check fails:
-- no target, and no negative, is or is near a line an evaluation judges or targets (sample_targets.py's held-out lines,
-  their links and the lines within NEAR of them, eval-100's patterns, the quotes' sources);
+- no target is or is near a line an evaluation judges or targets (sample_targets.py's held-out lines, their links and
+  the lines within NEAR of them, eval-100's patterns, the quotes' sources); a negative that is, is left out and counted,
+  as --hold-benchmark leaves out the benchmark's (the evaluations judge new lines; the question keeps its target);
 - no query is one of the evaluations' queries (eval-real, eval-v1, eval-100, eval-real/quotes), letters and digits
   compared;
 - every id is unique, and every target line exists.
@@ -112,29 +113,39 @@ def main() -> None:
         questions = kept
     texts = {}
 
-    def check(qid, line):
-        """The line's cleaned text into texts, or what keeps it out of training into problems."""
+    def check(qid, line, negative=False):
+        """The line's cleaned text into texts, or what keeps it out of training into problems; a negative that an
+        evaluation holds out is only left out. Whether the line is kept."""
         row = con.execute("SELECT bookId, lineIndex, heRef, content FROM line WHERE id = ?", (line,)).fetchone()
         if row is None:
             problems.append(f"{qid}: no line {line}")
-            return
+            return False
         book, index, ref, content = row
+        held = []
         if line in linked or (book, index) in near or (ref and any(p.search(ref) for p in patterns)):
-            problems.append(f"{qid}: line {line} ({ref}) is or is near a line an evaluation uses")
+            held.append(f"{qid}: line {line} ({ref}) is or is near a line an evaluation uses")
         plain = " ".join(re.sub(r"[^א-ת ]", " ", re.sub(r"[֑-ׇ]", "", content.replace("־", " "))).split())
         if any(k in plain for k in quotes):
-            problems.append(f"{qid}: line {line} holds one of the quotes' sources")
+            held.append(f"{qid}: line {line} holds one of the quotes' sources")
+        if held and negative:
+            return False
+        problems.extend(held)
         texts[line] = clean(content)
+        return True
 
+    left_out = 0
     for q in questions:
         check(q["id"], int(q["target_line"]))
-        for line in negatives[q["id"]]:
-            check(q["id"], line)
+        kept = [line for line in negatives[q["id"]] if check(q["id"], line, negative=True)]
+        left_out += len(negatives[q["id"]]) - len(kept)
+        negatives[q["id"]] = kept
         if letters(q["query"]) in evals:
             problems.append(f"{q['id']}: '{q['query']}' is an evaluation's query")
     if problems:
         print("\n".join(problems))
         sys.exit(1)
+    if left_out:
+        print(f"negatives that are or are near a line an evaluation uses, left out: {left_out}")
 
     def passage(line):
         return " ".join(texts[line].split()[:MAX_PASSAGE_WORDS])
