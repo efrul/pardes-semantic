@@ -8,12 +8,20 @@ passage to find. Every type is capped (TYPE_CAPS) so the 2.3M commentary links d
 
 The benchmark of build_eval_set.py stays out: no link touching its books (the Shulchan Aruch, its five tractates), and
 no Rambam halacha it queries with (those linked by the Ein Mishpat to the five tractates).
+
+With --hold-evaluations every other evaluation stays out too, as in build_chavruta_pairs.py (RUN3_PLAN.md, section 4,
+for teacher v2): no line an evaluation judges or targets, nor one linked to it or near it, nor one near a dev
+question's target; no line of crfh1672/search-queries' tractates; no line matching eval-100's sources, holding a
+quote's source, or copying a line of a book held out. It needs the evaluations' files (train-v2/, eval-*/): run it
+here, and give its pairs to kaggle_run.py push train --train-pairs.
 """
 
 import argparse
 import json
 import random
+import re
 import sqlite3
+import sys
 from pathlib import Path
 
 from build_eval_set import SHULCHAN_ARUCH, TRACTATES
@@ -28,6 +36,7 @@ TYPE_CAPS = {
 SPAN_WORDS = (5, 20)
 MIN_WORDS = 4
 MAX_PASSAGE_WORDS = 220  # ~256 tokens: what the training reads of a passage
+HERE = Path(__file__).resolve().parent
 
 
 def benchmark_held(con: sqlite3.Connection) -> tuple[set[int], set[int]]:
@@ -44,17 +53,49 @@ def benchmark_held(con: sqlite3.Connection) -> tuple[set[int], set[int]]:
     return held_books, held_lines
 
 
+def evaluations_held(con: sqlite3.Connection, held_books: set[int]):
+    """--hold-evaluations: whether a line (its id and its bookId, lineIndex, heRef, content) touches an evaluation, as
+    build_chavruta_pairs.py tests both sides of a link; [held_books] gains crfh1672's tractates."""
+    sys.path.insert(0, str(HERE / "train-v2"))
+    from build_pairs import DEV_BATCHES, read_tsv
+    from sample_targets import held_book_texts, held_out, neighbors, outside_set_books
+
+    held_books |= outside_set_books(con)
+    held_texts = held_book_texts(con, held_books)
+    judged, patterns, quotes = held_out(con)
+    linked, near = neighbors(con, judged)
+    dev = {int(q["target_line"]) for q in read_tsv(HERE / "train-v2" / "questions.tsv") if q["batch"] in DEV_BATCHES}
+    dev_linked, dev_near = neighbors(con, dev)
+    plain_quotes = [q for q in quotes if q]
+    marks = re.compile(r"[֑-ׇ]")
+
+    def touches(line_id, row):
+        book, index, ref, content = row
+        plain = " ".join(re.sub(r"[^א-ת ]", " ", marks.sub("", content.replace("־", " "))).split())
+        out = (book in held_books or line_id in linked or (book, index) in near or line_id in dev_linked
+               or (book, index) in dev_near or (ref and any(p.search(ref) for p in patterns))
+               or clean(content) in held_texts or any(q in plain for q in plain_quotes))
+        touches.left_out += out
+        return out
+
+    touches.left_out = 0
+    return touches
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--pairs", type=int, default=400_000)
     ap.add_argument("--seed", type=int, default=5785)
+    ap.add_argument("--hold-evaluations", action="store_true",
+                    help="leave out what every evaluation measures too (build_chavruta_pairs.py's test)")
     args = ap.parse_args()
     rng = random.Random(args.seed)
     con = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
 
     held_books, held_lines = benchmark_held(con)
+    touches = evaluations_held(con, held_books) if args.hold_evaluations else None
     print(f"held out: {len(held_books)} books, {len(held_lines)} Rambam halachot")
 
     chosen: list[tuple[str, int, int]] = []
@@ -70,8 +111,10 @@ def main() -> None:
     rng.shuffle(chosen)
 
     def text(line_id: int) -> str | None:
-        row = con.execute("SELECT content FROM line WHERE id = ?", (line_id,)).fetchone()
-        return clean(row[0]) if row else None
+        row = con.execute("SELECT bookId, lineIndex, heRef, content FROM line WHERE id = ?", (line_id,)).fetchone()
+        if row is None or (touches and touches(line_id, row)):
+            return None
+        return clean(row[3])
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     written = 0
@@ -95,6 +138,8 @@ def main() -> None:
                                ensure_ascii=False) + "\n")
             written += 1
     print(f"{written} pairs -> {args.out}")
+    if touches:
+        print(f"{touches.left_out} lines left out as near what the evaluations measure")
 
 
 if __name__ == "__main__":

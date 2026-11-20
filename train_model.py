@@ -23,6 +23,9 @@ a target share its text. Every row gets one negative: its own in turn, one more 
 question repeated, a search's other good lines), and for a row with none, a passage of the links' pairs past --limit,
 which no row learns (one more random negative, as the batch's other passages are).
 
+--matryoshka trains the vector's first dimensions too, each a vector of its own (MatryoshkaLoss over the same loss):
+TRAINING_PLAN.md's teacher v2 (768,512,384,256), whose first 384 can be measured against the 384 of the student.
+
 Writes a sentence-transformers directory that export_onnx.py --source and embed_corpus.py --source take.
 """
 
@@ -122,6 +125,7 @@ def main() -> None:
                     help="more pairs in the same jsonl (build_chavruta_pairs.py), added as they are; repeatable")
     ap.add_argument("--negatives", action="store_true",
                     help="train on the pairs' hard negatives too (their \"negatives\"), one a row")
+    ap.add_argument("--matryoshka", help="the dimensions the loss trains as vectors of their own, e.g. 768,512,384,256")
     ap.add_argument("--save-steps", type=int, default=200, help="checkpoint every N steps (resumed automatically)")
     ap.add_argument("--deadline", type=float, default=0, help="Unix time to stop by, saving the model (0: none)")
     ap.add_argument("--keep-checkpoints", type=int, default=2,
@@ -159,6 +163,10 @@ def main() -> None:
 
     st = load_st(args.source, args.device)
     loss = CachedMultipleNegativesRankingLoss(st, mini_batch_size=args.mini_batch)
+    if args.matryoshka:
+        from sentence_transformers.losses import MatryoshkaLoss
+
+        loss = MatryoshkaLoss(st, loss, matryoshka_dims=[int(d) for d in args.matryoshka.split(",")])
     gpu = args.device.startswith("cuda")
     training = SentenceTransformerTrainingArguments(
         output_dir=str(args.out / "checkpoints"),

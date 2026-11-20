@@ -122,14 +122,21 @@ def _measure(name, source):
     sh(f"python evaluate.py --eval {EVAL} --vectors {vec} --model {model} --out {rep}")
 
 if STAGE == "train":
-    sh(f"python fetch_library.py --out {TMP}/library")
     EVAL = f"{OUT}/eval"
-    sh(f"python build_eval_set.py --db {TMP}/library/seforim.db --out {EVAL}")
-    sh(f"python build_train_pairs.py --db {TMP}/library/seforim.db --out {OUT}/train/pairs.jsonl")
-    measure("base", None)
+    given = find_data("pairs.jsonl")
+    if given:
+        # Pairs built where the evaluations' files are (build_train_pairs.py --hold-evaluations, --train-pairs): the
+        # benchmark as train's first run built it, Dicta measured on it there; both kept here for the stages after
+        sh(f"mkdir -p {OUT}/train && cp {given} {OUT}/train/pairs.jsonl && cp -r {find_input('train', 'eval')} {EVAL}")
+    else:
+        sh(f"python fetch_library.py --out {TMP}/library")
+        sh(f"python build_eval_set.py --db {TMP}/library/seforim.db --out {EVAL}")
+        sh(f"python build_train_pairs.py --db {TMP}/library/seforim.db --out {OUT}/train/pairs.jsonl")
+        measure("base", None)
+    matryoshka = f"--matryoshka {OPTIONS['matryoshka']}" if OPTIONS.get("matryoshka") else ""
     # The teacher's training stops 45 min before the end, for its export and measure
     sh(f"python train_model.py --pairs {OUT}/train/pairs.jsonl --out {OUT}/teacher --limit {OPTIONS['pairs']} "
-       f"--batch-size {OPTIONS['batch']} --mini-batch 16 --deadline {DEADLINE - 2700} --keep-checkpoints 1")
+       f"--batch-size {OPTIONS['batch']} --mini-batch 16 {matryoshka} --deadline {DEADLINE - 2700} --keep-checkpoints 1")
     sh(f"rm -rf {OUT}/teacher/checkpoints")
     measure("teacher", f"{OUT}/teacher")
 elif STAGE == "tune":
@@ -369,9 +376,13 @@ def push(stage: str, opts: argparse.Namespace) -> None:
                "short_merge": opts.short_merge if opts.short_merge is not None else 8 if stage == "patch" else 0,
                "strip_number": opts.strip_number, "more": [f.name for f in opts.more] if stage in ("tune", "distill") else [],
                "questions": [f.name for f in opts.questions], "negatives": opts.negatives, "start": opts.start,
-               "lr": opts.lr, "kernels": kernels, "kernel": name}
+               "lr": opts.lr, "matryoshka": opts.matryoshka, "kernels": kernels, "kernel": name}
     data = {}
     datasets = []
+    if stage == "train" and opts.train_pairs:
+        if name == "train":
+            sys.exit("train --train-pairs needs --as: it reads the benchmark from train's output, which it would replace")
+        datasets.append(upload(name, {"pairs.jsonl": opts.train_pairs}, opts.dry_run))
     if stage == "tune":
         if not opts.questions:
             sys.exit("tune needs --questions (train-v2/build_pairs.py's jsonl)")
@@ -402,7 +413,7 @@ def push(stage: str, opts: argparse.Namespace) -> None:
     d.mkdir(parents=True, exist_ok=True)
     (d / "run.py").write_text(script, "utf-8")
     of = lambda s: slug(kernels.get(s, s))  # noqa: E731
-    sources = {"train": [], "tune": [of("train")] + ([of("distill")] if opts.start == "student" else []),
+    sources = {"train": [slug("train")] if opts.train_pairs else [], "tune": [of("train")] + ([of("distill")] if opts.start == "student" else []),
                "distill": [of("train")] + ([of("tune")] if opts.teacher == "tuned" else []),
                "embed": [of("train"), of("distill")] + ([of("tune")] if opts.chosen == "tuned" else []),
                "int8": [of("embed")], "pool": [of("train"), of("distill"), of("tune")], "patch": []}[stage]
@@ -457,6 +468,9 @@ def main() -> None:
                     help="push: refuse a stage whose --hours would take the week's GPU use past this share of the quota "
                          "(a stage the quota cuts off loses its output)")
     ap.add_argument("--pairs", type=int, default=150_000, help="train: training pairs")
+    ap.add_argument("--train-pairs", type=Path,
+                    help="train: build_train_pairs.py's pairs built here (--hold-evaluations), not on Kaggle; with --as")
+    ap.add_argument("--matryoshka", help="train: the dimensions trained as vectors of their own, e.g. 768,512,384,256")
     ap.add_argument("--batch", type=int, default=128, help="train: batch size (128 fits 16 GB)")
     ap.add_argument("--questions", type=Path, action="append", default=[],
                     help="tune: train-v2/build_pairs.py's questions (--hold-benchmark); repeatable, as feedback/collect.py's "
