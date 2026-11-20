@@ -31,7 +31,11 @@
 - **חיפושי המשוב:** ה־`searches.json` של [`../feedback/collect.py`](../feedback/collect.py) נכנס ל־`pool.json` במקום חיפושי
   המשוב הקודמים, והציונים שלו הם ה־`grades.tsv` שלו (`--feedback`).
 
-**תוצאות:** [`results-tune.md`](results-tune.md): הבסיס, המורה, התלמיד והמורה אחרי tune.
+**תוצאות:**
+- [`results-tune.md`](results-tune.md): הבסיס, המורה, התלמיד והמורה אחרי tune.
+- [`results-student2.md`](results-student2.md): תלמיד 2, שזוקק גם על טקסטים בסגנון חיפוש.
+- [`results-run3.md`](results-run3.md): מורה 3, תלמידים 3 ו־4, השורות הקצרות וחבילה 3.
+- [`results-negatives.md`](results-negatives.md): מורה עם השליליים הקשים של שאלות האימון ושל המשוב.
 
 ## שאלות הפיתוח של האימון
 
