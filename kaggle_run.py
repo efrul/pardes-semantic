@@ -19,6 +19,8 @@
     python kaggle_run.py push tune --as tune2 --model-release student-695cbe2 --questions ... --negatives
     #   a student tuned on the questions, in a kernel of its own: tune's output (the teacher) is kept. --start student:
     #   distill's student. Then: push pool --models tune2/tuned@merge+strip, push embed --chosen tuned --from tune=tune2
+    python kaggle_run.py push tune --as tune6 --from train=train2 --matryoshka 768,512,384,256 --questions ... --negatives
+    #   train2's teacher (push train --as train2 --train-pairs ...) tuned, its Matryoshka kept
 
 Each stage is a private Kaggle script kernel (`<user>/pardes-semantic-<stage>`, GPU and internet on; `--as <name>`:
 `<user>/pardes-semantic-<name>`, read by the stages after it with `--from <stage>=<name>`). The code of this
@@ -107,6 +109,9 @@ def release_model(tag):
     zipfile.ZipFile(f"{TMP}/{tag}.zip").extractall(f"{TMP}/{tag}")
     return next(d for d, dirs, files in os.walk(f"{TMP}/{tag}") if "modules.json" in files)
 
+# --matryoshka: the dimensions trained as vectors of their own, kept by the stages that train (train, tune)
+MATRYOSHKA = f"--matryoshka {OPTIONS['matryoshka']}" if OPTIONS.get("matryoshka") else ""
+
 def measure(name, source):
     # A measure that fails (an export check, an evaluation) must not cost the stage its training: logged, not fatal
     try:
@@ -133,10 +138,9 @@ if STAGE == "train":
         sh(f"python build_eval_set.py --db {TMP}/library/seforim.db --out {EVAL}")
         sh(f"python build_train_pairs.py --db {TMP}/library/seforim.db --out {OUT}/train/pairs.jsonl")
         measure("base", None)
-    matryoshka = f"--matryoshka {OPTIONS['matryoshka']}" if OPTIONS.get("matryoshka") else ""
     # The teacher's training stops 45 min before the end, for its export and measure
     sh(f"python train_model.py --pairs {OUT}/train/pairs.jsonl --out {OUT}/teacher --limit {OPTIONS['pairs']} "
-       f"--batch-size {OPTIONS['batch']} --mini-batch 16 {matryoshka} --deadline {DEADLINE - 2700} --keep-checkpoints 1")
+       f"--batch-size {OPTIONS['batch']} --mini-batch 16 {MATRYOSHKA} --deadline {DEADLINE - 2700} --keep-checkpoints 1")
     sh(f"rm -rf {OUT}/teacher/checkpoints")
     measure("teacher", f"{OUT}/teacher")
 elif STAGE == "tune":
@@ -160,7 +164,7 @@ elif STAGE == "tune":
     negatives = "--negatives" if OPTIONS.get("negatives") else ""
     lr = f"--lr {OPTIONS['lr']}" if OPTIONS.get("lr") else ""
     sh(f"python train_model.py --source {start} --pairs {pairs} --limit {OPTIONS['links']} "
-       f"{questions} --question-repeat {OPTIONS['repeat']} {more} {negatives} {lr} --out {OUT}/tuned "
+       f"{questions} --question-repeat {OPTIONS['repeat']} {more} {negatives} {lr} {MATRYOSHKA} --out {OUT}/tuned "
        f"--batch-size {OPTIONS['batch']} --mini-batch 16 --deadline {DEADLINE - 2700} --keep-checkpoints 1")
     sh(f"rm -rf {OUT}/tuned/checkpoints")
     measure("tuned", f"{OUT}/tuned")
@@ -470,7 +474,8 @@ def main() -> None:
     ap.add_argument("--pairs", type=int, default=150_000, help="train: training pairs")
     ap.add_argument("--train-pairs", type=Path,
                     help="train: build_train_pairs.py's pairs built here (--hold-evaluations), not on Kaggle; with --as")
-    ap.add_argument("--matryoshka", help="train: the dimensions trained as vectors of their own, e.g. 768,512,384,256")
+    ap.add_argument("--matryoshka", help="train, tune: the dimensions trained as vectors of their own, e.g. "
+                    "768,512,384,256 (tune: to keep what train's Matryoshka gave)")
     ap.add_argument("--batch", type=int, default=128, help="train: batch size (128 fits 16 GB)")
     ap.add_argument("--questions", type=Path, action="append", default=[],
                     help="tune: train-v2/build_pairs.py's questions (--hold-benchmark); repeatable, as feedback/collect.py's "
