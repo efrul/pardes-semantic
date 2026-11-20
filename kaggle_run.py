@@ -226,10 +226,14 @@ elif STAGE == "pool":
     runs = {}
     for spec in OPTIONS["models"].split(","):
         # "tune2/tuned@merge+strip": the model, in the output of a kernel run under another name (--as), its lines
-        # embedded otherwise (pool_rank.py)
+        # embedded otherwise (pool_rank.py); "+d384": its first 384 dimensions ranked too (pool_rank.py --dims)
         name, _, mode = spec.partition("@")
         kernel, _, name = name.rpartition("/")
+        parts = mode.split("+") if mode else []
+        dims = [x[1:] for x in parts if x[:1] == "d" and x[1:].isdigit()]
+        mode = "+".join(x for x in parts if not (x[:1] == "d" and x[1:].isdigit()))
         label = "-".join(x for x in (kernel, name, mode.replace("+", "-")) if x)
+        cut = f" --dims {','.join(dims)}" if dims else ""
         try:
             if name == "base":
                 runs["base"] = ""
@@ -241,9 +245,9 @@ elif STAGE == "pool":
                 parts = mode.split("+")
                 context = next((x for x in parts if x != "strip"), None)
                 flags = (f" --short-context {context}" if context else "") + (" --strip-number" if "strip" in parts else "")
-                runs[label] = f"--source {source_of(name, kernel)}{flags}"
+                runs[label] = f"--source {source_of(name, kernel)}{flags}{cut}"
             else:
-                runs[label] = f"--source {source_of(name, kernel)}"
+                runs[label] = f"--source {source_of(name, kernel)}{cut}"
         except SystemExit as e:
             print(f"Not ranked: {spec}: {e}", flush=True)
     spec = find_data("pool.json")
@@ -488,7 +492,9 @@ def main() -> None:
     ap.add_argument("--more", type=Path, action="append", default=[],
                     help="tune, distill --rank: more pairs (build_chavruta_pairs.py's jsonl), as they are; repeatable")
     ap.add_argument("--spec", type=Path, help="pool: eval-pool/pool_spec.py's searches")
-    ap.add_argument("--models", default="base,teacher,student,tuned", help="pool: the models to rank by")
+    ap.add_argument("--models", default="base,teacher,student,tuned",
+                    help="pool: the models to rank by, each <stage's model>, <kernel>/<model> (--as) and @<lines' "
+                         "mode>, e.g. tune3/tuned@merge+strip; +d384 or @d384: its first 384 dimensions too")
     ap.add_argument("--texts", type=int, default=300_000, help="distill: texts of train's pairs")
     ap.add_argument("--teacher", choices=("teacher", "tuned"), default="teacher",
                     help="distill: train's teacher, or tune's (train's on the training questions)")

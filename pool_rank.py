@@ -6,7 +6,9 @@
 pool.json (eval-pool/pool_spec.py): the searches, each with its query and its candidates, the app's lexical and dense
 ones. Every candidate the semantic index would hold (MIN_WORDS words or more, cleaned as embed_corpus.py cleans) is
 embedded with the model as a document, the query as a query, and the candidates ranked by their cosine. Without
---source, the Dicta model. ranks.json: {key: {"ids": [...], "scores": [...]}}, the best first.
+--source, the Dicta model. ranks.json: {key: {"ids": [...], "scores": [...]}}, the best first. --dims 384: also the
+ranking by the vectors' first 384 dimensions, renormalized (a model trained with Matryoshka), beside it as
+ranks-teacher-d384.json.
 """
 
 import argparse
@@ -40,10 +42,15 @@ def main() -> None:
                     help="how a short line (--short-words or fewer) is embedded: as it is, after its table of contents "
                     "entry, between its neighbours' words, not at all but before the next line's text, or not at all")
     ap.add_argument("--short-words", type=int, default=8)
+    ap.add_argument("--dims", help="comma separated: also the ranking by the vectors' first N dimensions, "
+                    "renormalized (a Matryoshka model's), beside --out as <its name>-d<N>.json")
     ap.add_argument("--strip-number", action="store_true",
                     help="a line's number in parentheses at its start, \"(א)\" of every verse, out of its text "
                          "(docs/SEARCH_ORDER_ISSUES.md, 3): the lines only, the queries have none")
     args = ap.parse_args()
+    dims = [int(n) for n in args.dims.split(",")] if args.dims else []
+    if dims and args.doc_source:
+        ap.error("--dims ranks by a model's own vectors, not by --doc-source's mapped ones")
     global PREP
     PREP = (lambda t: strip_number(clean(t))) if args.strip_number else clean
     import torch
@@ -99,6 +106,9 @@ def main() -> None:
         qv = embed_queries(loaded, queries)
     print(f"embedded in {(time.time() - t0) / 60:.1f} min", flush=True)
     write_ranks(searches, vectors, qv, args.out)
+    for n in dims:
+        cut = {d: normalize(v[:n]) for d, v in vectors.items()}
+        write_ranks(searches, cut, normalize(qv[:, :n]), args.out.with_name(f"{args.out.stem}-d{n}{args.out.suffix}"))
 
 
 PREP = clean  # how a line's content becomes the text embedded: --strip-number adds embed_corpus.strip_number
