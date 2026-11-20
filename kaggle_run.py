@@ -12,6 +12,7 @@
     python kaggle_run.py push pool --spec build/pool.json --release v3-20261012193827   # the models on the evaluations
     python kaggle_run.py push distill              # the 7-layer / 384-dim student of train's model, measured
     python kaggle_run.py push distill --teacher tuned --queries build/train/queries.txt   # of tune's, on searches too
+    #   (--as distill12 --layers 12: a student of 12 layers, in a kernel of its own)
     python kaggle_run.py push embed --chosen student --release v3-20261012193827   # the library's vectors, its model
     #   (--short-merge 8 --strip-number: its lines as pack 3's index holds them)
     python kaggle_run.py push int8                 # those vectors as int8 (a quarter of the size), with the model
@@ -183,7 +184,7 @@ elif STAGE == "distill":
            f"{given} --out {OUT}/student --deadline {DEADLINE - 1800}")
     else:
         sh(f"python distill_model.py --teacher {teacher} --pairs {pairs} {queries} --out {OUT}/student --texts {OPTIONS['texts']} --batch-size {OPTIONS['distill_batch']} "
-           f"--deadline {DEADLINE - 1800}")
+           f"--layers {OPTIONS.get('layers', 7)} --deadline {DEADLINE - 1800}")
     sh(f"rm -rf {OUT}/student/checkpoints {OUT}/student/teacher-embeddings.npy")
     measure("student", f"{OUT}/student")
 elif STAGE == "embed":
@@ -378,6 +379,7 @@ def push(stage: str, opts: argparse.Namespace) -> None:
     name = opts.as_ or stage
     kernels = kernels_of(opts)
     options = {"hours": opts.hours, "pairs": opts.pairs, "batch": opts.batch, "texts": opts.texts, "distill_batch": opts.distill_batch,
+               "layers": opts.layers,
                "chosen": opts.chosen, "weight": opts.weight, "release": opts.release, "links": opts.links,
                "repeat": opts.repeat, "teacher": opts.teacher, "models": opts.models,
                "rank": opts.rank, "model_release": opts.model_release,
@@ -506,6 +508,8 @@ def main() -> None:
                          "the --more pairs)")
     ap.add_argument("--distill-batch", type=int, default=32,
                     help="distill: batch per GPU (128 ran out of memory on a 16 GB T4)")
+    ap.add_argument("--layers", type=int, default=7,
+                    help="distill: the student's layers (distill_model.py --layers; the app's students have 7)")
     ap.add_argument("--chosen", choices=("base", "teacher", "student", "tuned"), default="student",
                     help="embed: the model (tuned: tune's, or with --from tune=<name> a kernel run under that name)")
     ap.add_argument("--model-release",
