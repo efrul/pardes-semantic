@@ -239,6 +239,32 @@ dense side, an ideal index:
 
 The lines the graph misses are seldom better answers; only the held-out questions, each with one target line, gain 2%.
 
+## 8. The whole library with tune3: pack 4 (2026-11-20)
+
+`tune3` (`tuned@3ab385f/pardes-clean-1`: student 5 fine-tuned on the training questions and the feedback, with their
+hard negatives, [`eval-pool/results-negatives.md`](eval-pool/results-negatives.md)) over pack 3's lines: a short line
+merged into the next, the number at a line's start left out, 4,817,891 lines.
+
+- `push embed --chosen tuned --from tune=tune3 --short-merge 8 --strip-number`: 277 min; `push int8`: 1 min, 1.85 GB.
+- `VectorIndexBuilder` here (4 CPUs, `-Xmx8g`): 58 min, 2.1 GB, one segment.
+- `check_vectors.py`, 300 rows: cosine min 0.965, mean 0.985 (0.222 against the next row's line), against student 2's
+  0.976 and 0.991. The difference is the int8 model's own drift from PyTorch, about the same at every length (mean 0.981
+  to 0.986), and the app meets it only in its queries.
+- [`eval-pool/pack_ranks.py`](eval-pool/pack_ranks.py) ranks the evaluations' candidates as the app does: by the pack's
+  vectors, the query by its int8 model. On every evaluation the pack is within the noise of `tune3` in PyTorch.
+- `IndexCheck.kt` and `check_index.py`, the 455 queries of section 7:
+  - the app's query vectors against Python's: cosine min 0.9979, mean 0.9997;
+  - the exact first ten that the app's dense search finds, by score: 0.981 for the real searches over all books, 0.985
+    for eval-100's, 0.972 for 40 words of a random line, 0.984 to 0.992 over the base books;
+  - 9 ms on average for a real search over all books, 2 ms over the base books, 12 ms for 40 words, 16 ms at most;
+  - every search gave its 150 lines (fewer is a walk stuck in a cluster of one text's copies, Pardes's
+    docs/SEARCH_ORDER_ISSUES.md, 11).
+
+The graph now finds nearly all of a search's exact first ten over all books: 0.981 for the 155 real searches, where
+student 1's index found 0.657 (section 7; 0.744 and student 2's 0.767 for the 39 the app runs over all books). Section
+7's misses were mostly short lines and headings, which pack 3 took out of the index by merging them into the next line.
+Pack 3 was not measured this way.
+
 ## Speed and size of the query model (4-core cloud CPU, one short query)
 
 | model | layers | dimensions | int8 ONNX | query |
