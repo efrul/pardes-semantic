@@ -1,6 +1,9 @@
 package io.github.kdroidfilter.seforimapp.logger
 
 // The app's logger, without Sentry: enough for the semantic package outside the app
+// Debug messages: off, as the app's default level leaves them
+inline fun debugln(message: () -> String) = Unit
+
 inline fun infoln(message: () -> String) = System.err.println("[info] " + message())
 
 inline fun warnln(message: () -> String) = System.err.println("[warn] " + message())
