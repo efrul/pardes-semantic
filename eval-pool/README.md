@@ -42,7 +42,8 @@
 - [`results-tune.md`](results-tune.md): הבסיס, המורה, התלמיד והמורה אחרי tune.
 - [`results-student2.md`](results-student2.md): תלמיד 2, שזוקק גם על טקסטים בסגנון חיפוש.
 - [`results-run3.md`](results-run3.md): מורה 3, תלמידים 3 ו־4, השורות הקצרות וחבילה 3.
-- [`results-negatives.md`](results-negatives.md): מורה עם השליליים הקשים של שאלות האימון ושל המשוב.
+- [`results-negatives.md`](results-negatives.md): מורה עם השליליים הקשים של שאלות האימון ושל המשוב, ותלמידיו.
+- [`results-teacher-v2.md`](results-teacher-v2.md): מורה v2, הקישורים הנקיים מהמבחנים עם Matryoshka.
 
 ## שאלות הפיתוח של האימון
 
