@@ -1,5 +1,6 @@
 """collect.py's write_daf against packages whose tractate is not a plain name, which must not name a file elsewhere,
-what it makes of the searches and the grades of other apps that a package may hold, and the rows it keeps once:
+what it makes of the searches and the grades of other apps that a package may hold, the rows it keeps once, the site's
+download that names no sender, and the day --eval-until counts by:
 
     python feedback/test_collect.py      (or pytest)
 """
@@ -14,7 +15,8 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from collect import ELSEWHERE, HISTORY, newest, place_results, read_packages, write_daf, write_history  # noqa: E402
+from collect import (ELSEWHERE, HIDDEN, HISTORY, graded_by, newest, place_results, read_packages,  # noqa: E402
+                     write_daf, write_history)
 
 
 def mark():
@@ -130,6 +132,32 @@ def test_a_row_two_computers_sent_is_kept_once_and_two_results_of_another_app_st
     assert senders == {SENDER: 1, other: 1}
     # The synced copy of each row is dropped; two results that differ by their reference alone are two
     assert [(g["lineId"], g["heRef"]) for g in grades] == [(5, None), (0, "A 1"), (0, "A 2")]
+
+
+def test_the_sites_download_names_no_sender():
+    grade = {"search": "k", "query": "q", "lineId": 5, "bookId": 1, "grade": 3, "rank": 0, "gradedAt": 100}
+    anonymous = {k: v for k, v in package(grades=[grade], searches=[{"query": "q", "lastAt": 100, "count": 1}]).items()
+                 if k != "sender"}
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        # As the site's "download all" writes it: no sender in a package, nor in a deletion
+        bundle = {"packages": [{"id": 1, "receivedAt": 1, "package": anonymous},
+                               {"id": 2, "receivedAt": 2, "package": {**anonymous, "grades": [dict(grade, gradedAt=200)]}}],
+                  "deletions": [{"deletedAt": 5}]}
+        (root / "pardes-feedback-2026-11-19.json").write_text(json.dumps(bundle), "utf-8")
+        with redirect_stdout(io.StringIO()):
+            grades, history, _, senders = read_packages([root])
+    assert senders == {HIDDEN: 2}
+    assert [(g["sender"], g["gradedAt"]) for g in grades] == [(HIDDEN, 100), (HIDDEN, 200)]
+    assert [h["sender"] for h in history] == [HIDDEN]
+
+
+def test_graded_by_a_day_in_utc():
+    day = 1_762_473_600_000  # 2025-11-07T00:00:00Z
+    assert graded_by(day, "2025-11-07")
+    assert graded_by(day + 86_399_999, "2025-11-07")
+    assert not graded_by(day + 86_400_000, "2025-11-07")
+    assert graded_by(day - 1, "2025-11-07")
 
 
 if __name__ == "__main__":

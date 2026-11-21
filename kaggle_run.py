@@ -7,18 +7,28 @@
     python kaggle_run.py wait train                # until it ends (prints the status as it changes)
     python kaggle_run.py output train              # its reports and models into build/kaggle-output/train
     python kaggle_run.py push tune --questions build/train/questions.jsonl --hours 3   # train's teacher on the questions
-    #   (--more build/train/chavruta.jsonl: other pairs too, as a private dataset)
+    #   (--more build/train/chavruta.jsonl: other pairs too; --questions build/feedback/feedback.jsonl: the feedback's
+    #   searches as questions too; --negatives: their hard negatives too)
     python kaggle_run.py push pool --spec build/pool.json --release v3-20261012193827   # the models on the evaluations
     python kaggle_run.py push distill              # the 7-layer / 384-dim student of train's model, measured
     python kaggle_run.py push distill --teacher tuned --queries build/train/queries.txt   # of tune's, on searches too
+    #   (--as distill12 --layers 12: a student of 12 layers, in a kernel of its own; --epochs 2: distilled twice as long)
     python kaggle_run.py push embed --chosen student --release v3-20261012193827   # the library's vectors, its model
+    #   (--short-merge 8 --strip-number: its lines as pack 3's index holds them)
     python kaggle_run.py push int8                 # those vectors as int8 (a quarter of the size), with the model
     python kaggle_run.py output int8               # -> VectorIndexBuilder --vectors .../vectors-int8
+    python kaggle_run.py push tune --as tune2 --model-release student-695cbe2 --questions ... --negatives
+    #   a student tuned on the questions, in a kernel of its own: tune's output (the teacher) is kept. --start student:
+    #   distill's student. Then: push pool --models tune2/tuned@merge+strip, push embed --chosen tuned --from tune=tune2
+    python kaggle_run.py push tune --as tune6 --from train=train2 --matryoshka 768,512,384,256 --questions ... --negatives
+    #   train2's teacher (push train --as train2 --train-pairs ...) tuned, its Matryoshka kept
 
-Each stage is a private Kaggle script kernel (`<user>/pardes-semantic-<stage>`, GPU and internet on). The code of this
+Each stage is a private Kaggle script kernel (`<user>/pardes-semantic-<stage>`, GPU and internet on; `--as <name>`:
+`<user>/pardes-semantic-<name>`, read by the stages after it with `--from <stage>=<name>`). The code of this
 folder travels inside the kernel (a compressed bundle in the generated script), so Kaggle needs no access to the
-private repository; so do tune's questions (train-v2/build_pairs.py's jsonl, built here: the kernel then needs no
-library) and pool's searches (eval-pool/pool_spec.py's, line ids only). A stage reads the previous one's output
+private repository; tune's questions (train-v2/build_pairs.py's jsonl and the feedback's, built here: the kernel then
+needs no library) and pool's searches (eval-pool/pool_spec.py's, line ids only) travel as the stage's private dataset,
+since a script past ~1 MB is refused. A stage reads the previous one's output
 (kernel_sources: tune and distill read train's, distill tune's too with --teacher tuned, embed reads train's and
 distill's, int8 reads embed's, pool reads train's, distill's and tune's: it ranks the evaluations' candidates by each
 of their models and the base one, or by --models only),
@@ -48,6 +58,8 @@ TEMPLATE = r'''
 import base64, io, json, os, subprocess, sys, tarfile, time
 START = time.time()
 STAGE, OPTIONS = __STAGE__, json.loads(__OPTIONS__)
+# The kernel of a stage that ran under another name (kaggle_run.py --from tune=tune2), and this one's (--as)
+KERNELS, KERNEL = OPTIONS.get("kernels") or {}, OPTIONS.get("kernel") or STAGE
 DEADLINE = START + OPTIONS["hours"] * 3600
 # /kaggle/src is read-only (Kaggle's copy of this script): the code goes to /tmp
 SRC, OUT, TMP = "/tmp/pardes-src", "/kaggle/working", "/tmp/pardes"
@@ -68,21 +80,26 @@ sh("nvidia-smi --query-gpu=name,memory.total --format=csv; df -h /kaggle/working
 sh('pip -q install "transformers==4.57.6" "tokenizers>=0.22,<0.23" "sentence-transformers==5.1.2" "datasets>=3,<5" '
    '"accelerate>=1.0" "onnx>=1.19" "onnxscript>=0.5" "onnxruntime==1.31.0" "zstandard>=0.23"')
 
+def under(d, slug):
+    # Whether [d] is inside the input [slug] names: a whole part of the path, as "...-tune" begins "...-tune2" too
+    return slug in d.split(os.sep)
+
 def find_data(name):
     # A file of the stage's data: in the bundle (data/), or in the stage's private dataset when too large for it
     if os.path.exists(f"data/{name}"):
         return f"data/{name}"
     for d, dirs, files in os.walk("/kaggle/input"):
-        if name in files and f"pardes-semantic-{STAGE}-data" in d:
+        if name in files and under(d, f"pardes-semantic-{KERNEL}-data"):
             return os.path.join(d, name)
     return None
 
-def find_input(stage, name):
-    for root in ("/kaggle/input",):
-        for d, dirs, files in os.walk(root):
-            if os.path.basename(d) == name and f"pardes-semantic-{stage}" in d:
-                return d
-    raise SystemExit(f"No {name} in the output of the {stage} stage: attach it (kernel_sources)")
+def find_input(stage, name, kernel=None):
+    # [name] in the output of [stage]'s kernel: its own, the one --from gives it, or [kernel]
+    kernel = kernel or KERNELS.get(stage, stage)
+    for d, dirs, files in os.walk("/kaggle/input"):
+        if os.path.basename(d) == name and under(d, f"pardes-semantic-{kernel}"):
+            return d
+    raise SystemExit(f"No {name} in the output of pardes-semantic-{kernel}: attach it (kernel_sources)")
 
 def release_model(tag):
     # A model released by this repository (its <tag>.zip), unpacked: the folder that holds its modules.json
@@ -92,6 +109,9 @@ def release_model(tag):
     urllib.request.urlretrieve(url, f"{TMP}/{tag}.zip")
     zipfile.ZipFile(f"{TMP}/{tag}.zip").extractall(f"{TMP}/{tag}")
     return next(d for d, dirs, files in os.walk(f"{TMP}/{tag}") if "modules.json" in files)
+
+# --matryoshka: the dimensions trained as vectors of their own, kept by the stages that train (train, tune)
+MATRYOSHKA = f"--matryoshka {OPTIONS['matryoshka']}" if OPTIONS.get("matryoshka") else ""
 
 def measure(name, source):
     # A measure that fails (an export check, an evaluation) must not cost the stage its training: logged, not fatal
@@ -108,28 +128,44 @@ def _measure(name, source):
     sh(f"python evaluate.py --eval {EVAL} --vectors {vec} --model {model} --out {rep}")
 
 if STAGE == "train":
-    sh(f"python fetch_library.py --out {TMP}/library")
     EVAL = f"{OUT}/eval"
-    sh(f"python build_eval_set.py --db {TMP}/library/seforim.db --out {EVAL}")
-    sh(f"python build_train_pairs.py --db {TMP}/library/seforim.db --out {OUT}/train/pairs.jsonl")
-    measure("base", None)
+    given = find_data("pairs.jsonl")
+    if given:
+        # Pairs built where the evaluations' files are (build_train_pairs.py --hold-evaluations, --train-pairs): the
+        # benchmark as train's first run built it, Dicta measured on it there; both kept here for the stages after
+        sh(f"mkdir -p {OUT}/train && cp {given} {OUT}/train/pairs.jsonl && cp -r {find_input('train', 'eval')} {EVAL}")
+    else:
+        sh(f"python fetch_library.py --out {TMP}/library")
+        sh(f"python build_eval_set.py --db {TMP}/library/seforim.db --out {EVAL}")
+        sh(f"python build_train_pairs.py --db {TMP}/library/seforim.db --out {OUT}/train/pairs.jsonl")
+        measure("base", None)
     # The teacher's training stops 45 min before the end, for its export and measure
     sh(f"python train_model.py --pairs {OUT}/train/pairs.jsonl --out {OUT}/teacher --limit {OPTIONS['pairs']} "
-       f"--batch-size {OPTIONS['batch']} --mini-batch 16 --deadline {DEADLINE - 2700} --keep-checkpoints 1")
+       f"--batch-size {OPTIONS['batch']} --mini-batch 16 {MATRYOSHKA} --deadline {DEADLINE - 2700} --keep-checkpoints 1")
     sh(f"rm -rf {OUT}/teacher/checkpoints")
     measure("teacher", f"{OUT}/teacher")
 elif STAGE == "tune":
-    # The fine-tuned teacher trained on: the training questions, repeated, and some of the links' pairs it learned from
+    # The fine-tuned model trained on: the training questions, repeated, and some of the links' pairs train's teacher
+    # learned from. It starts from train's teacher, or from a student: distill's (--start student) or one released here
+    # (--model-release)
     EVAL = find_input("train", "eval")
-    teacher = find_input("train", "teacher")
+    if OPTIONS.get("model_release"):
+        start = release_model(OPTIONS["model_release"])
+    elif OPTIONS.get("start") == "student":
+        start = find_input("distill", "student")
+    else:
+        start = find_input("train", "teacher")
+        try:  # train's teacher measured, beside the tuned one
+            sh(f"cp -r {find_input('train', 'report-teacher')} {OUT}/")
+        except (subprocess.CalledProcessError, SystemExit) as e:
+            print(f"No report of train's teacher: {e}", flush=True)
     pairs = os.path.join(find_input("train", "train"), "pairs.jsonl")
-    try:  # train's teacher measured, beside the tuned one
-        sh(f"cp -r {find_input('train', 'report-teacher')} {OUT}/")
-    except (subprocess.CalledProcessError, SystemExit) as e:
-        print(f"No report of train's teacher: {e}", flush=True)
+    questions = " ".join(f"--questions {find_data(name)}" for name in OPTIONS["questions"])
     more = " ".join(f"--more {find_data(name)}" for name in OPTIONS["more"])
-    sh(f"python train_model.py --source {teacher} --pairs {pairs} --limit {OPTIONS['links']} "
-       f"--questions data/questions.jsonl --question-repeat {OPTIONS['repeat']} {more} --out {OUT}/tuned "
+    negatives = "--negatives" if OPTIONS.get("negatives") else ""
+    lr = f"--lr {OPTIONS['lr']}" if OPTIONS.get("lr") else ""
+    sh(f"python train_model.py --source {start} --pairs {pairs} --limit {OPTIONS['links']} "
+       f"{questions} --question-repeat {OPTIONS['repeat']} {more} {negatives} {lr} {MATRYOSHKA} --out {OUT}/tuned "
        f"--batch-size {OPTIONS['batch']} --mini-batch 16 --deadline {DEADLINE - 2700} --keep-checkpoints 1")
     sh(f"rm -rf {OUT}/tuned/checkpoints")
     measure("tuned", f"{OUT}/tuned")
@@ -148,12 +184,13 @@ elif STAGE == "distill":
            f"{given} --out {OUT}/student --deadline {DEADLINE - 1800}")
     else:
         sh(f"python distill_model.py --teacher {teacher} --pairs {pairs} {queries} --out {OUT}/student --texts {OPTIONS['texts']} --batch-size {OPTIONS['distill_batch']} "
-           f"--deadline {DEADLINE - 1800}")
+           f"--layers {OPTIONS.get('layers', 7)} --epochs {OPTIONS.get('epochs', 1.0)} --deadline {DEADLINE - 1800}")
     sh(f"rm -rf {OUT}/student/checkpoints {OUT}/student/teacher-embeddings.npy")
     measure("student", f"{OUT}/student")
 elif STAGE == "embed":
     chosen = OPTIONS["chosen"]
-    source = None if chosen == "base" else find_input("distill" if chosen == "student" else "train", chosen)
+    stage_of = {"teacher": "train", "student": "distill", "tuned": "tune"}  # --from: a kernel run under another name
+    source = None if chosen == "base" else find_input(stage_of[chosen], chosen)
     src = f"--source {source}" if source else ""
     # The query model first: an export that fails its checks stops the stage in minutes, not after the embedding
     model_dir = f"{OUT}/model-{chosen}"
@@ -170,8 +207,11 @@ elif STAGE == "embed":
     # The release is pinned: the vectors are of its line ids, and the index is built against the same seforim.db
     release = f"--release {OPTIONS['release']}" if OPTIONS["release"] else ""
     sh(f"python fetch_library.py --out {TMP}/library {release}")
+    # As the index of pack 3: short lines merged into the next, a line's number left out (eval-pool/results-run3.md)
+    merge = f"--short-merge {OPTIONS['short_merge']}" if OPTIONS.get("short_merge") else ""
+    strip = "--strip-number" if OPTIONS.get("strip_number") else ""
     sh(f"python embed_corpus.py --db {TMP}/library/seforim.db --backend torch --device cuda --dtype float16 {src} "
-       f"--out {OUT}/vectors")
+       f"{merge} {strip} --out {OUT}/vectors")
 elif STAGE == "pool":
     # The evaluations' searches, their candidates ranked by each model attached and the base one (eval-pool/README.md):
     # the release is the one the evaluations ran on, as the candidates are its line ids
@@ -182,10 +222,19 @@ elif STAGE == "pool":
     # --model-release: "student" is a model released here (student 2 is no stage's output any more), not distill's
     released = release_model(OPTIONS["model_release"]) if OPTIONS.get("model_release") else None
 
-    def source_of(name):
-        return released if name == "student" and released else find_input(stages[name], name)
+    def source_of(name, kernel=None):
+        return released if name == "student" and released and not kernel else find_input(stages[name], name, kernel)
     runs = {}
-    for name in OPTIONS["models"].split(","):
+    for spec in OPTIONS["models"].split(","):
+        # "tune2/tuned@merge+strip": the model, in the output of a kernel run under another name (--as), its lines
+        # embedded otherwise (pool_rank.py); "+d384": its first 384 dimensions ranked too (pool_rank.py --dims)
+        name, _, mode = spec.partition("@")
+        kernel, _, name = name.rpartition("/")
+        parts = mode.split("+") if mode else []
+        dims = [x[1:] for x in parts if x[:1] == "d" and x[1:].isdigit()]
+        mode = "+".join(x for x in parts if not (x[:1] == "d" and x[1:].isdigit()))
+        label = "-".join(x for x in (kernel, name, mode.replace("+", "-")) if x)
+        cut = f" --dims {','.join(dims)}" if dims else ""
         try:
             if name == "base":
                 runs["base"] = ""
@@ -193,16 +242,15 @@ elif STAGE == "pool":
                 doc = name.split(":", 1)[1]
                 runs[f"asym-{doc}"] = (f"--source {find_input('distill', 'student')} "
                                        f"--doc-source {find_input(stages[doc], doc)} --proj-out {OUT}/ranks-proj-{doc}.json")
-            elif "@" in name:  # "student@merge+strip": the model, its lines embedded otherwise (pool_rank.py)
-                model, mode = name.split("@", 1)
+            elif mode:
                 parts = mode.split("+")
                 context = next((x for x in parts if x != "strip"), None)
                 flags = (f" --short-context {context}" if context else "") + (" --strip-number" if "strip" in parts else "")
-                runs[f"{model}-{mode.replace('+', '-')}"] = f"--source {source_of(model)}{flags}"
+                runs[label] = f"--source {source_of(name, kernel)}{flags}{cut}"
             else:
-                runs[name] = f"--source {source_of(name)}"
+                runs[label] = f"--source {source_of(name, kernel)}{cut}"
         except SystemExit as e:
-            print(f"Not ranked: {name}: {e}", flush=True)
+            print(f"Not ranked: {spec}: {e}", flush=True)
     spec = find_data("pool.json")
     if not spec:
         raise SystemExit("No pool.json: attach the stage's private dataset")
@@ -317,30 +365,50 @@ def check_quota(stage: str, opts: argparse.Namespace) -> None:
                  f"quota ({left:.1f} h left). Give it fewer --hours, or wait for the quota to renew ({renews}).")
 
 
+def kernels_of(opts: argparse.Namespace) -> dict[str, str]:
+    """--from's "tune=tune2,distill=distill2": the kernel each stage named ran under (--as), when not its own."""
+    pairs = [p.split("=", 1) for p in (opts.from_ or "").split(",") if p]
+    if any(len(p) != 2 or p[0] not in STAGES for p in pairs):
+        sys.exit(f"--from takes <stage>=<kernel name>, comma separated, of the stages {', '.join(STAGES)}")
+    return dict(pairs)
+
+
 def push(stage: str, opts: argparse.Namespace) -> None:
     if not opts.dry_run and stage != "int8":
         check_quota(stage, opts)
+    name = opts.as_ or stage
+    kernels = kernels_of(opts)
     options = {"hours": opts.hours, "pairs": opts.pairs, "batch": opts.batch, "texts": opts.texts, "distill_batch": opts.distill_batch,
+               "layers": opts.layers, "epochs": opts.epochs,
                "chosen": opts.chosen, "weight": opts.weight, "release": opts.release, "links": opts.links,
                "repeat": opts.repeat, "teacher": opts.teacher, "models": opts.models,
-               "rank": opts.rank, "model_release": opts.model_release, "short_merge": opts.short_merge,
-               "strip_number": opts.strip_number, "more": [f.name for f in opts.more] if stage in ("tune", "distill") else []}
+               "rank": opts.rank, "model_release": opts.model_release,
+               "short_merge": opts.short_merge if opts.short_merge is not None else 8 if stage == "patch" else 0,
+               "strip_number": opts.strip_number, "more": [f.name for f in opts.more] if stage in ("tune", "distill") else [],
+               "questions": [f.name for f in opts.questions], "negatives": opts.negatives, "start": opts.start,
+               "lr": opts.lr, "matryoshka": opts.matryoshka, "kernels": kernels, "kernel": name}
     data = {}
+    datasets = []
+    if stage == "train" and opts.train_pairs:
+        if name == "train":
+            sys.exit("train --train-pairs needs --as: it reads the benchmark from train's output, which it would replace")
+        datasets.append(upload(name, {"pairs.jsonl": opts.train_pairs}, opts.dry_run))
     if stage == "tune":
         if not opts.questions:
             sys.exit("tune needs --questions (train-v2/build_pairs.py's jsonl)")
-        data["data/questions.jsonl"] = opts.questions
-    datasets = []
-    if stage == "tune" and opts.more:
-        # Chavruta's pairs and the like are megabytes: they travel as a private dataset, as distill's searches do
-        datasets.append(upload(stage, {f.name: f for f in opts.more}, opts.dry_run))
+        # The questions with their negatives' texts (1 MB), Chavruta's pairs and the like: a private dataset, as
+        # distill's searches
+        files = {f.name: f for f in opts.questions + opts.more}
+        if len(files) < len(opts.questions) + len(opts.more):
+            sys.exit("tune: two of --questions and --more have the same file name, as the dataset would")
+        datasets.append(upload(name, files, opts.dry_run))
     if stage == "distill" and (opts.queries or opts.more or opts.teacher_embeddings):
         # 145k searches make a script of 2.5 MB, which Kaggle refuses: they travel as a private dataset, with --rank's pairs
         files = {"queries.txt": opts.queries} if opts.queries else {}
         files |= {f.name: f for f in opts.more}
         if opts.teacher_embeddings:
             files["teacher-embeddings.npy"] = opts.teacher_embeddings
-        datasets.append(upload(stage, files, opts.dry_run))
+        datasets.append(upload(name, files, opts.dry_run))
     if stage == "patch" and not (opts.model_release and opts.release):
         sys.exit("patch needs --model-release (a model's release tag here, e.g. student-695cbe2) and --release")
     if stage == "pool":
@@ -348,22 +416,28 @@ def push(stage: str, opts: argparse.Namespace) -> None:
             sys.exit("pool needs --spec (eval-pool/pool_spec.py's json) and --release (the evaluations' release)")
         # With crfh1672's 422 searches and the feedback's the script was 1,065 KB, which Kaggle refuses (400; 961 KB
         # passed): the searches travel as a private dataset, as distill's do
-        datasets.append(upload(stage, {"pool.json": opts.spec}, opts.dry_run))
+        datasets.append(upload(name, {"pool.json": opts.spec}, opts.dry_run))
     script = TEMPLATE.replace("__STAGE__", repr(stage)).replace("__OPTIONS__", repr(json.dumps(options))) \
         .replace("__BUNDLE__", repr(bundle(data)))
-    d = BUILD / stage
+    d = BUILD / name
     d.mkdir(parents=True, exist_ok=True)
     (d / "run.py").write_text(script, "utf-8")
-    sources = {"train": [], "tune": [slug("train")],
-               "distill": [slug("train")] + ([slug("tune")] if opts.teacher == "tuned" else []),
-               "embed": [slug("train"), slug("distill")], "int8": [slug("embed")],
-               "pool": [slug("train"), slug("distill"), slug("tune")], "patch": []}[stage]
+    of = lambda s: slug(kernels.get(s, s))  # noqa: E731
+    sources = {"train": [slug("train")] if opts.train_pairs else [], "tune": [of("train")] + ([of("distill")] if opts.start == "student" else []),
+               "distill": [of("train")] + ([of("tune")] if opts.teacher == "tuned" else []),
+               "embed": [of("train"), of("distill")] + ([of("tune")] if opts.chosen == "tuned" else []),
+               "int8": [of("embed")], "pool": [of("train"), of("distill"), of("tune")], "patch": []}[stage]
+    if stage == "pool":  # the kernels its --models name ("tune2/tuned")
+        named = {spec.partition("@")[0].rpartition("/")[0] for spec in opts.models.split(",")} - {""}
+        sources += [slug(k) for k in sorted(named) if slug(k) not in sources]
     meta = {
-        "id": slug(stage), "title": f"pardes-semantic-{stage}", "code_file": "run.py", "language": "python",
+        "id": slug(name), "title": f"pardes-semantic-{name}", "code_file": "run.py", "language": "python",
         "kernel_type": "script", "is_private": True, "enable_gpu": stage != "int8", "enable_internet": True,
         "dataset_sources": datasets, "competition_sources": [], "kernel_sources": sources, "model_sources": [],
     }
-    if opts.accelerator:
+    if meta["enable_gpu"] and opts.accelerator:
+        # Named, not left to Kaggle's default: on 2026-11-21 two pushes without one waited in the queue 1.8 and over
+        # 3.5 hours, while the same pool pushed with NvidiaTeslaT4 started within seconds
         meta["machine_shape"] = opts.accelerator
     (d / "kernel-metadata.json").write_text(json.dumps(meta, indent=2) + "\n", "utf-8")
     print(f"{d / 'run.py'}: {len(script) / 1024:.0f} KB, sources {sources}")
@@ -392,6 +466,13 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("action", choices=("push", "status", "wait", "output"))
     ap.add_argument("stage", choices=STAGES)
+    ap.add_argument("--as", dest="as_", metavar="NAME",
+                    help="the kernel's name instead of the stage's (pardes-semantic-<NAME>, e.g. tune2), so that a run "
+                         "keeps the output of the one before it; status, wait and output take it too")
+    ap.add_argument("--from", dest="from_", metavar="STAGE=NAME,...",
+                    help="the kernels to read stages from when they ran under another name, e.g. tune=tune2")
+    ap.add_argument("--start", choices=("teacher", "student"), default="teacher",
+                    help="tune: train's teacher, or distill's student (--model-release: a student released here)")
     ap.add_argument("--hours", type=float, default=8.0,
                     help="the stage's time budget (sessions: 9-12 h): train, tune, distill and pool stop by it; for embed "
                          "it is only what the quota's check counts")
@@ -399,14 +480,25 @@ def main() -> None:
                     help="push: refuse a stage whose --hours would take the week's GPU use past this share of the quota "
                          "(a stage the quota cuts off loses its output)")
     ap.add_argument("--pairs", type=int, default=150_000, help="train: training pairs")
+    ap.add_argument("--train-pairs", type=Path,
+                    help="train: build_train_pairs.py's pairs built here (--hold-evaluations), not on Kaggle; with --as")
+    ap.add_argument("--matryoshka", help="train, tune: the dimensions trained as vectors of their own, e.g. "
+                    "768,512,384,256 (tune: to keep what train's Matryoshka gave)")
     ap.add_argument("--batch", type=int, default=128, help="train: batch size (128 fits 16 GB)")
-    ap.add_argument("--questions", type=Path, help="tune: train-v2/build_pairs.py's questions (--hold-benchmark)")
+    ap.add_argument("--questions", type=Path, action="append", default=[],
+                    help="tune: train-v2/build_pairs.py's questions (--hold-benchmark); repeatable, as feedback/collect.py's "
+                         "pairs are questions too")
     ap.add_argument("--repeat", type=int, default=10, help="tune: each question this many times")
+    ap.add_argument("--lr", type=float, help="tune: the learning rate (train_model.py's 2e-5 when not given)")
+    ap.add_argument("--negatives", action="store_true",
+                    help="tune: the questions' hard negatives too (train_model.py --negatives)")
     ap.add_argument("--links", type=int, default=20_000, help="tune: the first N of train's pairs, with the questions")
     ap.add_argument("--more", type=Path, action="append", default=[],
                     help="tune, distill --rank: more pairs (build_chavruta_pairs.py's jsonl), as they are; repeatable")
     ap.add_argument("--spec", type=Path, help="pool: eval-pool/pool_spec.py's searches")
-    ap.add_argument("--models", default="base,teacher,student,tuned", help="pool: the models to rank by")
+    ap.add_argument("--models", default="base,teacher,student,tuned",
+                    help="pool: the models to rank by, each <stage's model>, <kernel>/<model> (--as) and @<lines' "
+                         "mode>, e.g. tune3/tuned@merge+strip; +d384 or @d384: its first 384 dimensions too")
     ap.add_argument("--texts", type=int, default=300_000, help="distill: texts of train's pairs")
     ap.add_argument("--teacher", choices=("teacher", "tuned"), default="teacher",
                     help="distill: train's teacher, or tune's (train's on the training questions)")
@@ -418,32 +510,40 @@ def main() -> None:
                          "the --more pairs)")
     ap.add_argument("--distill-batch", type=int, default=32,
                     help="distill: batch per GPU (128 ran out of memory on a 16 GB T4)")
-    ap.add_argument("--chosen", choices=("base", "teacher", "student"), default="student", help="embed: the model")
+    ap.add_argument("--layers", type=int, default=7,
+                    help="distill: the student's layers (distill_model.py --layers; the app's students have 7)")
+    ap.add_argument("--epochs", type=float, default=1.0,
+                    help="distill: passes over its texts (distill_model.py --epochs; the app's students had 1)")
+    ap.add_argument("--chosen", choices=("base", "teacher", "student", "tuned"), default="student",
+                    help="embed: the model (tuned: tune's, or with --from tune=<name> a kernel run under that name)")
     ap.add_argument("--model-release",
                     help="patch, pool: the release tag of a model here (its <tag>.zip), e.g. student-695cbe2; pool ranks "
                          "by it as \"student\"")
     ap.add_argument("--strip-number", action="store_true",
-                    help="patch: a line's number in parentheses at its start left out too (embed_corpus.py)")
-    ap.add_argument("--short-merge", type=int, default=8,
-                    help="patch: lines of this many words or fewer merged into the next (embed_corpus.py)")
+                    help="patch, embed: a line's number in parentheses at its start left out too (embed_corpus.py)")
+    ap.add_argument("--short-merge", type=int,
+                    help="patch (8 when not given), embed: lines of this many words or fewer merged into the next "
+                         "(embed_corpus.py)")
     ap.add_argument("--weight", type=float, default=3.0,
                     help="embed: the model's hybridDenseWeight (3: the fine-tuned model's best, BENCHMARK.md)")
     ap.add_argument("--release", help="embed: the SeforimLibrary release tag (default: the latest when the stage runs); "
                     "pool: the release the evaluations ran on")
-    ap.add_argument("--accelerator", help="Kaggle machine shape, e.g. NvidiaTeslaT4 (default: Kaggle's GPU default)")
+    ap.add_argument("--accelerator", default="NvidiaTeslaT4",
+                    help="the GPU stages' Kaggle machine shape (NvidiaTeslaP100 is retired); empty: Kaggle's default")
     ap.add_argument("--every", type=int, default=120, help="wait: seconds between status checks")
     ap.add_argument("--dry-run", action="store_true", help="push: write the kernel in build/kaggle, do not send it")
     args = ap.parse_args()
+    name = args.as_ or args.stage
     if args.action == "push":
         push(args.stage, args)
     elif args.action == "status":
-        print(status(args.stage))
+        print(status(name))
     elif args.action == "wait":
-        wait(args.stage, args.every)
+        wait(name, args.every)
     else:
-        out = HERE / "build" / "kaggle-output" / args.stage
+        out = HERE / "build" / "kaggle-output" / name
         out.mkdir(parents=True, exist_ok=True)
-        kaggle("kernels", "output", slug(args.stage), "-p", str(out))
+        kaggle("kernels", "output", slug(name), "-p", str(out))
         print(f"-> {out}")
 
 

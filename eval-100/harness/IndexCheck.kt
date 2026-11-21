@@ -11,9 +11,9 @@ import java.util.concurrent.Executors
 import kotlin.math.sqrt
 
 // The vector index against an exact search, through the app's own dense search (BENCHMARK.md, section
-// 4): each query's first ten of IndependentSemanticSearch.search (k = 150; all books, then base books only) and of an
-// exact scan of the same int8 vectors by cosine, as [line id, cosine], the time of the app's search, and the app's
-// float query vector (check_index.py compares it with Python's). Compiled as Eval.kt.
+// 4): each query's first ten of IndependentSemanticSearch.search (k = 150; all books, then base books only) and how
+// many it gave, the first ten of an exact scan of the same int8 vectors by cosine, as [line id, cosine], the time of
+// the app's search, and the app's float query vector (check_index.py compares it with Python's). Compiled as Eval.kt.
 // args: seforim.db (pardes-model/ and pardes.vec.lucene/ next to its .lucene), queries.tsv (id, group, query,
 // expected), out.jsonl
 fun main(args: Array<String>) {
@@ -38,10 +38,10 @@ fun main(args: Array<String>) {
             val base = dense.search(q[2], 150, true, null)
             val t2 = System.nanoTime()
             System.err.println("${q[0]} ${(t1 - t0) / 1_000_000}ms ${(t2 - t1) / 1_000_000}ms")
-            // Lucene's score of a byte vector by COSINE is (1 + cosine) / 2
+            // Lucene's score of a byte vector by COSINE is (1 + cosine) / 2; all of them kept, for their count
             Triple(
-                all.take(10).map { it.lineId to 2.0 * it.score - 1 },
-                base.take(10).map { it.lineId to 2.0 * it.score - 1 },
+                all.map { it.lineId to 2.0 * it.score - 1 },
+                base.map { it.lineId to 2.0 * it.score - 1 },
                 (t1 - t0) to (t2 - t1),
             )
         }
@@ -60,8 +60,11 @@ fun main(args: Array<String>) {
                     .put("expected", q.getOrElse(3) { "" })
                     .put("model", spec.id)
                     .put("vector", JSONArray(floats[i].map { it.toDouble() }))
-                    .put("appAll", hits(app[i].first))
-                    .put("appBase", hits(app[i].second))
+                    .put("appAll", hits(app[i].first.take(10)))
+                    .put("appBase", hits(app[i].second.take(10)))
+                    // Fewer than k: the walk stuck in a cluster of one text's copies (docs/SEARCH_ORDER_ISSUES.md, 11)
+                    .put("countAll", app[i].first.size)
+                    .put("countBase", app[i].second.size)
                     .put("usAll", app[i].third.first / 1000)
                     .put("usBase", app[i].third.second / 1000)
                     .put("exactAll", hits(exactAll[i]))

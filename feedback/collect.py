@@ -6,10 +6,13 @@ files, or folders of them), or both:
     python collect.py --settings user_settings.db --db seforim.db --out build/feedback [--eval-share 0.2]
     python collect.py --packages inbox/ --db seforim.db --out build/feedback
     python collect.py --packages pardes-feedback-2026-11-07.json --db seforim.db --out build/feedback   # the admin page's download
+    python collect.py --packages pardes-feedback-2026-11-19.json --db seforim.db --out build/feedback --eval-until 2026-11-07
 
 A package holds what was new since its sender's previous one; a line graded again keeps its newest grade, each sender's
 own (the senders' searches stay apart, and a query is on the same side of the evaluation for all of them). A grade or a
 search two senders sent alike counts once: one user database, synced to two computers, is sent under two sender ids.
+The site's download names no sender (feedback-service's app.js leaves them out), so its packages are all one sender's,
+HIDDEN: a line two users graded in the same search keeps the newer grade.
 
 The searches are the users' and the lines' text the library's, so everything is written outside the repository:
 - queries.tsv: qid, query, its scope (categoryId, bookId, tocId, extended), the model it ran with, when it was graded,
@@ -19,11 +22,13 @@ The searches are the users' and the lines' text the library's, so everything is 
 - grades.tsv: qid, lineId, grade (3 exactly this, 2 relevant, 0 not relevant), rank (the result's place, from 0);
 - searches.json: each search with its graded lines as candidates (../eval-passages/rank.py, and its judged.py's way of
   scoring), the searches of the evaluation only (--eval-share of them, picked by their key, so a search stays where it
-  is from one collection to the next);
+  is from one collection to the next; and with --eval-until every search first graded by that day, UTC, as run 3
+  measured the searches of 2026-11-07's download);
 - pairs.jsonl: the other searches, in train_model.py's format: the query as anchor, each line graded 2 or 3 as a
   positive, the lines graded 0 in the same search as "negatives" (train-v2/build_pairs.py --negatives' shape). A search
-  that is an evaluation's query, or a line an evaluation holds out, is left out, as build_chavruta_pairs.py leaves them
-  out: the benchmark's books and Rambam halachot, crfh1672's tractates and a copy of their lines, the lines the
+  whose words are those of a search of the evaluation (in another scope: the key differs, the query does not) is left
+  out, and so is a search that is an evaluation's query, or a line an evaluation holds out, as build_chavruta_pairs.py
+  leaves them out: the benchmark's books and Rambam halachot, crfh1672's tractates and a copy of their lines, the lines the
   evaluations judge or target and their neighbors, the dev questions' targets and theirs, a quote's source.
 - history.tsv: the searches made, of the packages that hold them (their senders chose to send them) and of --settings:
   sender, query, scope, how many times, when last, and for a search made in another app (the app sends Zayit's and
@@ -44,7 +49,7 @@ import sqlite3
 import statistics
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -64,6 +69,7 @@ COLUMNS = ("searchKey", "query", "lineId", "bookId", "grade", "rank", "searchCat
 
 
 LOCAL = "local"  # the sender of --settings' grades
+HIDDEN = "hidden"  # the sender of the site's download, which names none (feedback-service's app.js)
 TRACTATE = re.compile(r"[A-Za-z]+")  # a tractate as the app names its layout file; a package's goes into a file name
 HISTORY = ("query", "categoryId", "bookId", "tocId", "extended", "count", "lastAt")
 # A search made in another app: which (zayit, otzaria), where it searched as that app says it, and its title for it
@@ -96,14 +102,16 @@ def packages_of(file: Path) -> list[dict]:
     """The packages in [file]: one package as the app sends it, or many as the service gives them to the maintainer (the
     admin page's download, pardes-feedback-<date>.json, and GET /v1/packages?bodies=1: {"packages": [{"sender",
     "receivedAt", "package"}], "deletions": [{"sender", "deletedAt"}]}), without those a sender had deleted, as fetch.py
-    leaves them out of the inbox."""
+    leaves them out of the inbox. The site's download names no sender, in a package or a deletion: its packages are
+    HIDDEN's, and a deleted sender's are not in it (the service deleted them)."""
     data = json.loads(file.read_text("utf-8"))
     if not (isinstance(data, dict) and isinstance(data.get("packages"), list)):
         return [data]
     deleted = {}
     for d in data.get("deletions") or []:
-        deleted[d["sender"]] = max(deleted.get(d["sender"], 0), d["deletedAt"])
-    return [p["package"] for p in data["packages"]
+        if d.get("sender"):
+            deleted[d["sender"]] = max(deleted.get(d["sender"], 0), d["deletedAt"])
+    return [p["package"] if p["package"].get("sender") else {**p["package"], "sender": HIDDEN} for p in data["packages"]
             if isinstance(p.get("package"), dict) and p.get("receivedAt", 0) > deleted.get(p.get("sender"), -1)]
 
 
@@ -183,7 +191,7 @@ def newest(rows: list[dict], key, time: str) -> list[dict]:
 
 
 def sender_of(sender: str) -> str:
-    return sender if sender == LOCAL else sender[:8]
+    return sender if sender in (LOCAL, HIDDEN) else sender[:8]
 
 
 def qid_of(key: str, sender: str = LOCAL) -> str:
@@ -194,6 +202,12 @@ def qid_of(key: str, sender: str = LOCAL) -> str:
 def in_evaluation(key: str, share: float) -> bool:
     """Whether the search [key] is one of the evaluation's, by its key alone: the same answer at every collection."""
     return int(hashlib.sha1(("eval:" + key).encode("utf-8")).hexdigest()[:8], 16) / 0xFFFFFFFF < share
+
+
+def graded_by(at: int, day: str) -> bool:
+    """Whether a grade given at [at] (milliseconds, as the app saves gradedAt) was given on [day] (YYYY-MM-DD, UTC) or
+    before."""
+    return datetime.fromtimestamp(at / 1000, timezone.utc).date().isoformat() <= day
 
 
 class HeldOut:
@@ -233,6 +247,8 @@ def main() -> None:
     ap.add_argument("--db", type=Path, required=True, help="seforim.db of the library the searches ran on")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--eval-share", type=float, default=0.2, help="the share of searches kept for the evaluation")
+    ap.add_argument("--eval-until", help="YYYY-MM-DD: every search first graded by that day (UTC) in the evaluation too, "
+                                         "whole: 2026-11-07 keeps run 3's feedback searches out of training")
     args = ap.parse_args()
     if not args.settings and not args.packages:
         ap.error("--settings, --packages or both")
@@ -257,9 +273,15 @@ def main() -> None:
     for r in rows:
         s = searches.setdefault((r["sender"], r["searchKey"]), {
             **{k: r[k] for k in COLUMNS if k not in ("lineId", "bookId", "grade", "rank")}, "sender": r["sender"],
-            "source": r.get("source"), "lines": {}})
+            "source": r.get("source"), "lines": {}, "firstAt": r["gradedAt"]})
         s["lines"][r["lineId"]] = (r["grade"], r["rank"])
         s["gradedAt"] = max(s["gradedAt"], r["gradedAt"])
+        s["firstAt"] = min(s["firstAt"], r["gradedAt"])
+    # By the key alone (a query is on the same side for every sender), or by the day it was first graded
+    evaluated = {k for k, s in searches.items() if in_evaluation(k[1], args.eval_share)
+                 or (args.eval_until and graded_by(s["firstAt"], args.eval_until))}
+    # The same words in another scope are another key: kept out of training too
+    evaluated_queries = {letters(searches[k]["query"]) for k in evaluated}
     lines = {}
     ids = sorted({line for s in searches.values() for line in s["lines"]})
     for i in range(0, len(ids), 900):
@@ -280,8 +302,7 @@ def main() -> None:
         gw.writerow(["qid", "lineId", "grade", "rank"])
         for (sender, key), s in sorted(searches.items(), key=lambda kv: kv[1]["gradedAt"]):
             qid = qid_of(key, sender)
-            # By the key alone: a query is on the same side for every sender
-            evaluation = in_evaluation(key, args.eval_share)
+            evaluation = (sender, key) in evaluated
             qw.writerow([qid, s["query"], s["searchCategoryId"] or "", s["searchBookId"] or "", s["searchTocId"] or "",
                          int(bool(s["searchExtended"])), s["model"] or "", s["gradedAt"],
                          "eval" if evaluation else "train", sender_of(sender), s["source"] or ""])
@@ -292,6 +313,9 @@ def main() -> None:
                 continue
             if held.query(s["query"]):
                 dropped["an evaluation's query"] += 1
+                continue
+            if letters(s["query"]) in evaluated_queries:
+                dropped["the words of a search of the evaluation"] += 1
                 continue
 
             def usable(lid):

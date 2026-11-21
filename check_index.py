@@ -1,7 +1,7 @@
 """Reads IndexCheck.kt's output (eval-100/harness): the app's query vectors against Python's (the same int8 ONNX model,
 onnxruntime and tokenizers), how much of an exact search's first ten the vector index finds through the app's dense
-search, the line a query was taken from among the first ten (group rand40, its line id as `expected`), and the time of
-the app's search.
+search, the line a query was taken from among the first ten (group rand40, its line id as `expected`), the time of
+the app's search, and the searches that gave fewer than their 150 lines.
 
     python check_index.py check.jsonl pardes-model/
 
@@ -67,6 +67,12 @@ def main() -> None:
         if group == "rand40":
             print(f"  its line in the first ten: app {sum(int(r['expected']) in {h[0] for h in r['appAll']} for r in rs)}, "
                   f"exact {sum(int(r['expected']) in {h[0] for h in r['exactAll']} for r in rs)}")
+        # k = 150: fewer is a walk stuck in a cluster of one text's copies (docs/SEARCH_ORDER_ISSUES.md of Pardes, 11)
+        if "countAll" in rs[0]:
+            short = {side: [r for r in rs if r[f"count{side}"] < 150] for side in ("All", "Base")}
+            seen = {r["id"]: r for r in short["All"] + short["Base"]}
+            print(f"  fewer than 150 results: all {len(short['All'])}, base {len(short['Base'])}"
+                  + "".join(f"; {r['id']} {r['countAll']}/{r['countBase']}" for r in list(seen.values())[:5]))
 
 
 if __name__ == "__main__":
