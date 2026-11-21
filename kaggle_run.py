@@ -435,7 +435,9 @@ def push(stage: str, opts: argparse.Namespace) -> None:
         "kernel_type": "script", "is_private": True, "enable_gpu": stage != "int8", "enable_internet": True,
         "dataset_sources": datasets, "competition_sources": [], "kernel_sources": sources, "model_sources": [],
     }
-    if opts.accelerator:
+    if meta["enable_gpu"] and opts.accelerator:
+        # Named, not left to Kaggle's default: on 2026-11-21 two pushes without one waited in the queue 1.8 and over
+        # 3.5 hours, while the same pool pushed with NvidiaTeslaT4 started within seconds
         meta["machine_shape"] = opts.accelerator
     (d / "kernel-metadata.json").write_text(json.dumps(meta, indent=2) + "\n", "utf-8")
     print(f"{d / 'run.py'}: {len(script) / 1024:.0f} KB, sources {sources}")
@@ -526,7 +528,8 @@ def main() -> None:
                     help="embed: the model's hybridDenseWeight (3: the fine-tuned model's best, BENCHMARK.md)")
     ap.add_argument("--release", help="embed: the SeforimLibrary release tag (default: the latest when the stage runs); "
                     "pool: the release the evaluations ran on")
-    ap.add_argument("--accelerator", help="Kaggle machine shape, e.g. NvidiaTeslaT4 (default: Kaggle's GPU default)")
+    ap.add_argument("--accelerator", default="NvidiaTeslaT4",
+                    help="the GPU stages' Kaggle machine shape (NvidiaTeslaP100 is retired); empty: Kaggle's default")
     ap.add_argument("--every", type=int, default=120, help="wait: seconds between status checks")
     ap.add_argument("--dry-run", action="store_true", help="push: write the kernel in build/kaggle, do not send it")
     args = ap.parse_args()
