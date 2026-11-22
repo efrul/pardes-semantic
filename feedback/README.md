@@ -130,6 +130,8 @@ python feedback/collect.py --packages pardes-feedback-2026-11-19.json --db build
 
 ## לאימון
 
+- **חיפושים בלי ציון:** רוב החיפושים שנשלחים לא מקבלים ציון. שופט נותן להם ציון ב־[`../judge/`](../judge/README.md),
+  מה־`history.tsv` של כאן, ומשם באים זוגות ומבחן באותו מבנה.
 - **השליליות:** מאז 2026-11-19 `train_model.py --negatives` משתמש בשדה `negatives`. הזוגות נכנסים כמו השאלות של train-v2,
   ב־`--questions` נוסף (`kaggle_run.py push tune --questions ... --questions feedback.jsonl --negatives`):
   - כל שורה מקבלת שלילית אחת. בכל פעם שהשאילתה חוזרת, השורה מקבלת את השלילית הבאה שלה.
