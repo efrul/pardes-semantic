@@ -275,12 +275,13 @@ elif STAGE == "pool":
         # that model, so that a slow model after it does not cost the reranker its time
         if OPTIONS.get("rerank") and name == (OPTIONS.get("rerank_base") or next(iter(runs))):
             only = f" --only {OPTIONS['rerank_only']}" if OPTIONS.get("rerank_only") else ""
-            try:
-                sh(f"python pool_rerank.py --db {TMP}/library/seforim.db --spec {spec} --ranks {OUT}/ranks-{name}.json "
-                   f"--model {OPTIONS['rerank']} --top {OPTIONS['rerank_top']}{only} "
-                   f"--out {OUT}/ranks-{name}-{OPTIONS['rerank'].split('/')[-1].lower()}.json")
-            except subprocess.CalledProcessError as e:
-                print(f"RERANK FAILED: {e}", flush=True)
+            for reranker in OPTIONS["rerank"].split(","):  # several, comma separated: each its own ranks file
+                try:
+                    sh(f"python pool_rerank.py --db {TMP}/library/seforim.db --spec {spec} --ranks {OUT}/ranks-{name}.json "
+                       f"--model {reranker} --top {OPTIONS['rerank_top']}{only} "
+                       f"--out {OUT}/ranks-{name}-{reranker.split('/')[-1].lower()}.json")
+                except subprocess.CalledProcessError as e:
+                    print(f"RERANK {reranker} FAILED: {e}", flush=True)
 elif STAGE == "patch":
     # The library's lines that merging the short lines changes (embed_corpus.py --short-merge --changed-only), embedded
     # with a model released by this repository, as int8: an index's other vectors are kept (merge_vectors.py)
@@ -521,8 +522,8 @@ def main() -> None:
                     help="pool: the models to rank by, each <stage's model>, <kernel>/<model> (--as) and @<lines' "
                          "mode>, e.g. tune3/tuned@merge+strip; +d384 or @d384: its first 384 dimensions too; "
                          "st:<Hub name>: another family's embedder (st:Qwen/Qwen3-Embedding-4B@merge+strip)")
-    ap.add_argument("--rerank", help="pool: a reranker of the Hub (Qwen/Qwen3-Reranker-4B) over the first candidates "
-                                     "of one model's order (pool_rerank.py)")
+    ap.add_argument("--rerank", help="pool: a reranker of the Hub (Qwen/Qwen3-Reranker-4B), or several, comma "
+                                     "separated, over the first candidates of one model's order (pool_rerank.py)")
     ap.add_argument("--rerank-top", type=int, default=20, help="pool: how many of each search's first candidates")
     ap.add_argument("--rerank-base", help="pool: the ranked model whose order it is, as its ranks file names it "
                                           "(tune3-tuned-merge-strip); the first model when not given")
