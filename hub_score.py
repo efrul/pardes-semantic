@@ -8,8 +8,9 @@ between processes.
 
 texts.json is a list of texts, pairs.json a list of [query, text]; the vectors are normalized, in the texts' order.
 --prompt: the model's own prompt of that name before each text (its "query" prompt). A reranker whose name holds
-"Qwen3-Reranker" is asked as its card asks it, yes or no, and scored by the two logits; any other is a
-sentence-transformers CrossEncoder.
+"Qwen3-Reranker" is asked as its card asks it, yes or no, and scored by the two logits; a path to an .onnx file is a
+cross-encoder's export, run by ONNX Runtime on the CPU with the tokenizer.json beside it (the file an app would load,
+quantized as it would be); any other is a sentence-transformers CrossEncoder.
 
 Other families' tokenizers keep the Hebrew points and accents, which ours strips (pardes_semantic/clean.py): plain()
 takes them out first, so that a line is the same text to every model.
@@ -88,6 +89,28 @@ def rerank_here(model: str, pairs: list, dtype: str, batch: int, max_tokens: int
             enc = tok.pad({"input_ids": [pre + x + suf for x in ids]}, padding=True, return_tensors="pt").to(device)
             logits = lm(**enc).logits[:, -1, :].float()
             return (logits[:, yes] - logits[:, no]).tolist()
+    elif model.endswith(".onnx"):
+        import onnxruntime as ort
+        from tokenizers import Tokenizer
+        tok = Tokenizer.from_file(str(Path(model).with_name("tokenizer.json")))
+        tok.enable_truncation(max_length=max_tokens, strategy="only_second")
+        pad = tok.token_to_id("<pad>") or 0
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = os.cpu_count() or 1
+        session = ort.InferenceSession(model, options, providers=["CPUExecutionProvider"])
+        typed = "token_type_ids" in {i.name for i in session.get_inputs()}
+
+        def score(chunk):
+            rows = [tok.encode(q, d).ids for q, d in chunk]
+            width = max(len(r) for r in rows)
+            ids = np.full((len(rows), width), pad, dtype=np.int64)
+            mask = np.zeros((len(rows), width), dtype=np.int64)
+            for k, r in enumerate(rows):
+                ids[k, :len(r)], mask[k, :len(r)] = r, 1
+            feed = {"input_ids": ids, "attention_mask": mask}
+            if typed:
+                feed["token_type_ids"] = np.zeros_like(ids)
+            return session.run(None, feed)[0].reshape(-1).tolist()
     else:
         from sentence_transformers import CrossEncoder
         ce = CrossEncoder(model, max_length=max_tokens, device=device)
@@ -106,10 +129,10 @@ def rerank_here(model: str, pairs: list, dtype: str, batch: int, max_tokens: int
 
 def _shards(what: str, model: str, items: list, extra: list[str], load) -> list:
     """[items] through `hub_score.py what` on every GPU, a process each on its share; in this process when there is
-    one GPU or none."""
+    one GPU or none, or the model is a file for the CPU."""
     import torch
     gpus = torch.cuda.device_count()
-    if gpus <= 1:
+    if gpus <= 1 or model.endswith(".onnx"):
         return None
     from huggingface_hub import snapshot_download
     snapshot_download(model)  # once, before the processes that would each fetch it
