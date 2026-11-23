@@ -229,6 +229,13 @@ elif STAGE == "pool":
         # "tune2/tuned@merge+strip": the model, in the output of a kernel run under another name (--as), its lines
         # embedded otherwise (pool_rank.py); "+d384": its first 384 dimensions ranked too (pool_rank.py --dims)
         name, _, mode = spec.partition("@")
+        if name.startswith("st:"):
+            # "st:Qwen/Qwen3-Embedding-4B@merge+strip": another family's embedder, from the Hub (pool_rank.py --st)
+            parts = mode.split("+") if mode else []
+            context = next((x for x in parts if x != "strip"), None)
+            flags = (f" --short-context {context}" if context else "") + (" --strip-number" if "strip" in parts else "")
+            runs["-".join(["st", name.split("/")[-1].lower(), *parts])] = f"--st {name[3:]}{flags}"
+            continue
         kernel, _, name = name.rpartition("/")
         parts = mode.split("+") if mode else []
         dims = [x[1:] for x in parts if x[:1] == "d" and x[1:].isdigit()]
@@ -263,6 +270,17 @@ elif STAGE == "pool":
             sh(f"python pool_rank.py --db {TMP}/library/seforim.db --spec {spec} {src} --out {OUT}/ranks-{name}.json")
         except subprocess.CalledProcessError as e:
             print(f"RANK {name} FAILED: {e}", flush=True)
+            continue
+        # --rerank: a reranker of the Hub over the first candidates of one model's order (pool_rerank.py), right after
+        # that model, so that a slow model after it does not cost the reranker its time
+        if OPTIONS.get("rerank") and name == (OPTIONS.get("rerank_base") or next(iter(runs))):
+            only = f" --only {OPTIONS['rerank_only']}" if OPTIONS.get("rerank_only") else ""
+            try:
+                sh(f"python pool_rerank.py --db {TMP}/library/seforim.db --spec {spec} --ranks {OUT}/ranks-{name}.json "
+                   f"--model {OPTIONS['rerank']} --top {OPTIONS['rerank_top']}{only} "
+                   f"--out {OUT}/ranks-{name}-{OPTIONS['rerank'].split('/')[-1].lower()}.json")
+            except subprocess.CalledProcessError as e:
+                print(f"RERANK FAILED: {e}", flush=True)
 elif STAGE == "patch":
     # The library's lines that merging the short lines changes (embed_corpus.py --short-merge --changed-only), embedded
     # with a model released by this repository, as int8: an index's other vectors are kept (merge_vectors.py)
@@ -383,6 +401,8 @@ def push(stage: str, opts: argparse.Namespace) -> None:
                "chosen": opts.chosen, "weight": opts.weight, "release": opts.release, "links": opts.links,
                "repeat": opts.repeat, "teacher": opts.teacher, "models": opts.models,
                "rank": opts.rank, "model_release": opts.model_release,
+               "rerank": opts.rerank, "rerank_top": opts.rerank_top, "rerank_base": opts.rerank_base,
+               "rerank_only": opts.rerank_only,
                "short_merge": opts.short_merge if opts.short_merge is not None else 8 if stage == "patch" else 0,
                "strip_number": opts.strip_number, "more": [f.name for f in opts.more] if stage in ("tune", "distill") else [],
                "questions": [f.name for f in opts.questions], "negatives": opts.negatives, "start": opts.start,
@@ -428,7 +448,8 @@ def push(stage: str, opts: argparse.Namespace) -> None:
                "embed": [of("train"), of("distill")] + ([of("tune")] if opts.chosen == "tuned" else []),
                "int8": [of("embed")], "pool": [of("train"), of("distill"), of("tune")], "patch": []}[stage]
     if stage == "pool":  # the kernels its --models name ("tune2/tuned")
-        named = {spec.partition("@")[0].rpartition("/")[0] for spec in opts.models.split(",")} - {""}
+        named = {spec.partition("@")[0].rpartition("/")[0] for spec in opts.models.split(",")
+                 if not spec.startswith("st:")} - {""}
         sources += [slug(k) for k in sorted(named) if slug(k) not in sources]
     meta = {
         "id": slug(name), "title": f"pardes-semantic-{name}", "code_file": "run.py", "language": "python",
@@ -498,7 +519,14 @@ def main() -> None:
     ap.add_argument("--spec", type=Path, help="pool: eval-pool/pool_spec.py's searches")
     ap.add_argument("--models", default="base,teacher,student,tuned",
                     help="pool: the models to rank by, each <stage's model>, <kernel>/<model> (--as) and @<lines' "
-                         "mode>, e.g. tune3/tuned@merge+strip; +d384 or @d384: its first 384 dimensions too")
+                         "mode>, e.g. tune3/tuned@merge+strip; +d384 or @d384: its first 384 dimensions too; "
+                         "st:<Hub name>: another family's embedder (st:Qwen/Qwen3-Embedding-4B@merge+strip)")
+    ap.add_argument("--rerank", help="pool: a reranker of the Hub (Qwen/Qwen3-Reranker-4B) over the first candidates "
+                                     "of one model's order (pool_rerank.py)")
+    ap.add_argument("--rerank-top", type=int, default=20, help="pool: how many of each search's first candidates")
+    ap.add_argument("--rerank-base", help="pool: the ranked model whose order it is, as its ranks file names it "
+                                          "(tune3-tuned-merge-strip); the first model when not given")
+    ap.add_argument("--rerank-only", help="pool: comma separated, only the searches whose key starts so (crfh/,real/)")
     ap.add_argument("--texts", type=int, default=300_000, help="distill: texts of train's pairs")
     ap.add_argument("--teacher", choices=("teacher", "tuned"), default="teacher",
                     help="distill: train's teacher, or tune's (train's on the training questions)")

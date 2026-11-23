@@ -9,6 +9,9 @@ embedded with the model as a document, the query as a query, and the candidates 
 --source, the Dicta model. ranks.json: {key: {"ids": [...], "scores": [...]}}, the best first. --dims 384: also the
 ranking by the vectors' first 384 dimensions, renormalized (a model trained with Matryoshka), beside it as
 ranks-teacher-d384.json.
+
+--st NAME: another family's embedder instead, a sentence-transformers model of the Hub (hub_score.py): the lines as
+they are, without the Hebrew points and accents, and the queries after the model's own "query" prompt.
 """
 
 import argparse
@@ -30,6 +33,8 @@ def main() -> None:
     ap.add_argument("--spec", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--source", help="a local model (train_model.py, distill_model.py), not the Dicta one")
+    ap.add_argument("--st", help="a sentence-transformers model of the Hub instead, another family's (hub_score.py)")
+    ap.add_argument("--st-batch", type=int, default=8)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--dtype", default="float16")
     ap.add_argument("--batch-tokens", type=int, default=8192, help="padded tokens per batch")
@@ -51,6 +56,8 @@ def main() -> None:
     dims = [int(n) for n in args.dims.split(",")] if args.dims else []
     if dims and args.doc_source:
         ap.error("--dims ranks by a model's own vectors, not by --doc-source's mapped ones")
+    if args.st and (args.source or args.doc_source):
+        ap.error("--st is a model of its own: not with --source or --doc-source")
     global PREP
     PREP = (lambda t: strip_number(clean(t))) if args.strip_number else clean
     import torch
@@ -73,7 +80,14 @@ def main() -> None:
     dtype = getattr(torch, args.dtype)
     t0 = time.time()
     queries = [m.QUERY_PREFIX + s["query"] for s in searches]
-    if args.doc_source:
+    if args.st:
+        import hub_score
+        docs = sorted(texts)
+        lines = [hub_score.plain(texts[d][len(m.DOCUMENT_PREFIX):]) for d in docs]
+        vectors = dict(zip(docs, hub_score.embed(args.st, lines, None, args.dtype, args.st_batch, m.DOCUMENT_MAX_TOKENS)))
+        qv = hub_score.embed(args.st, [hub_score.plain(s["query"]) for s in searches], "query", args.dtype, 32,
+                             m.QUERY_MAX_TOKENS)
+    elif args.doc_source:
         # Asymmetric: the library's lines by a teacher (embedded once, offline), the queries by the small model the app
         # runs. The student learnt the teacher's vectors projected to its dimensions, so a linear map, fitted by least
         # squares on candidates both embed, takes the teacher's vectors into the student's space.
