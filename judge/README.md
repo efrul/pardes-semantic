@@ -52,6 +52,10 @@
    - **בשאר,** כל שורה טובה (2 או 3) היא positive, והשורות שקיבלו 0 הן ה־`negatives`.
    - **שורה שקיבלה 1 אינה חיובית ואינה שלילית** (בדיקת השופט, למטה).
    - **מה שהמבחנים שומרים נשאר בחוץ,** באותה בדיקה של `feedback/collect.py`.
+   - **מבחן המשוב אינו בריפו,** ולכן הבדיקה הזו לא רואה אותו. `--pool pool.json` מוציא כל חיפוש שהמילים שלו הן של
+     חיפוש במאגר המבחנים, וכותב `pool.json` חדש, עם חיפושי המבחן של השיפוט בסופו. `--learnt` מוציא מהמבחן חיפוש
+     שמודל קודם כבר למד (הזוגות של המשוב בריצה שלו).
+   - **`--train-share 0.5`** משאיר חצי מחיפושי האימון, לפי המילים שלהם: כדי לבדוק אם יותר חיפושים עוזרים יותר.
 
 ## בדיקת השופט
 
@@ -105,15 +109,19 @@
 
 **הזוגות והמבחן** (`build_pairs.py`):
 
-| | לפי הכללים עד היום | עם `--release-old-benchmark` |
-|---|---|---|
-| חיפושים לאימון | 228 | 260 |
-| זוגות | 599 | 686 |
-| מהם של שורה מהידע | 100 | 137 |
-| שליליים | 343 | 452 |
-| חיפושים שכל השורות הטובות שלהם יצאו | 69 | 37 |
+| | לפי הכללים עד היום | עם `--release-old-benchmark` | וחצי מהם (`--train-share 0.5`) |
+|---|---|---|---|
+| חיפושים לאימון | 226 | 257 | 129 |
+| זוגות | 597 | 683 | 328 |
+| מהם של שורה מהידע | 100 | 137 | 60 |
+| שליליים | 338 | 445 | 253 |
+| חיפושים שכל השורות הטובות שלהם יצאו | 68 | 37 | |
 
-המבחן: 145 חיפושים, 998 שורות שפוטות.
+המבחן: 143 חיפושים, 983 שורות שפוטות.
+
+המספרים הם עם `--pool` ו־`--learnt` (2026-11-23). בלעדיהם היו 260 חיפושים לאימון ו־145 למבחן:
+- 3 חיפושי אימון וחיפוש מבחן אחד היו במילים של חיפוש במבחן המשוב, שאינו בריפו;
+- חיפוש מבחן אחד היה במילים של חיפוש ש־`tune3` למד.
 
 ## ההחלטה על המבחן הישן (2026-11-22)
 
@@ -169,8 +177,12 @@ python judge/make_batches.py build/judge/run.jsonl build/judge/batches --check b
 python judge/agree.py build/judge/check-key.tsv build/judge/out/grades-*.tsv
 python judge/merge_grades.py --hand build/judge/hand-grades.tsv build/judge/hand-notes.tsv \
     --grades build/judge/out/grades-*.tsv --notes build/judge/out/notes-*.tsv --out judge
-python judge/build_pairs.py --db build/library/seforim.db --key build/judge/key.tsv --release-old-benchmark --out build/judged
+python judge/build_pairs.py --db build/library/seforim.db --key build/judge/key.tsv --release-old-benchmark \
+    --pool pool.json --learnt feedback.jsonl --learnt questions.jsonl --out build/judged
 ```
+
+`pool.json` הוא המאגר של ריצת ה־`pool` האחרונה, ו־`feedback.jsonl` ו־`questions.jsonl` הם הקבצים ש־`tune3` למד מהם.
+שלושתם בנתונים הפרטיים של השלבים ב־Kaggle (`pardes-semantic-pool-data`, ‏`pardes-semantic-tune3-data`).
 
 `check.jsonl` הוא השורות של `run.jsonl` של חיפושי הבדיקה, ו־`check-key.tsv` הציונים שלהם (`qid`, ‏`lineId`, ‏`grade`,
 במספר החיפוש).

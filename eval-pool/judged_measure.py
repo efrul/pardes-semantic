@@ -4,12 +4,17 @@ model orders only the search's judged lines, as results-run3.md's tables of the 
 graded are left out, so the order among the judged lines is measured, not what the model finds in the library.
 
     python judged_measure.py ranks-base.json ranks-teacher.json ranks-student.json ranks-tuned.json \
-        --feedback build/feedback/grades.tsv [--md]
+        --feedback build/feedback/grades.tsv [--judged build/judged/grades.tsv] [--md]
 
 A model is named by its file (ranks-<name>.json, ../pool_rank.py's). Per evaluation and model: the searches whose first
 judged line is good (graded 2 or 3), with a good line in the first three, and with the source (3) in the first three.
 Each pair of models is compared search by search on the first good line, as ../eval-crfh/measure.py compares them: the
 searches only one of them gets, and whether the difference passes twice its noise (2 * sqrt(b + c), McNemar's).
+
+--judged adds the searches a judge graded (../judge/build_pairs.py's searches.json, merged into pool.json too, and its
+grades.tsv). Their lines are the first six of the pack that ran them, and the sources the judge added: the model of
+that pack is measured on the lines it chose itself, its mistakes among them, so it reads lower there than a model
+that did not choose them.
 """
 
 import argparse
@@ -44,12 +49,15 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("ranks", nargs="+", type=Path)
     ap.add_argument("--feedback", type=Path, help="collect.py's grades.tsv of the feedback's searches in pool.json")
+    ap.add_argument("--judged", type=Path, help="judge/build_pairs.py's grades.tsv of the judged searches in pool.json")
     ap.add_argument("--md", action="store_true", help="markdown tables")
     args = ap.parse_args()
     evaluations = {"real": grades_of(HERE.parent / "eval-real" / "grades.tsv"),
                    "v1": grades_of(HERE.parent / "eval-v1" / "grades.tsv")}
     if args.feedback:
         evaluations["feedback"] = grades_of(args.feedback)
+    if args.judged:  # its ids are the pool's keys already ("judged/j-0001")
+        evaluations["judged"] = {qid.removeprefix("judged/"): lines for qid, lines in grades_of(args.judged).items()}
     models = {path.stem.removeprefix("ranks-"): json.loads(path.read_text("utf-8")) for path in args.ranks}
 
     # {evaluation: {model: {qid: (first good, good in three, source in three)}}}

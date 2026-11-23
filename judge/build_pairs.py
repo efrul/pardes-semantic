@@ -2,7 +2,7 @@
 (README.md): the same pairs.jsonl that train_model.py --negatives reads, the same hold-out of what the evaluations judge.
 
     python judge/build_pairs.py --db build/library/seforim.db --key build/judge/key.tsv --out build/judged \
-        [--release-old-benchmark]
+        [--release-old-benchmark] [--pool pool.json] [--learnt feedback.jsonl ...] [--train-share 0.5]
 
 grades.tsv and status.tsv are this folder's; --key is pick_searches.py's key.tsv, which gives each id its query and
 stays outside the repository, as --out does: pairs.jsonl holds the searches and the library's text.
@@ -17,6 +17,13 @@ stays outside the repository, as --out does: pairs.jsonl holds the searches and 
   asks. --release-old-benchmark lets the old benchmark's books (the Shulchan Arukh, Shabbat, Bava Kamma, Bava Metzia,
   Sanhedrin) and the Rambam halachot it asks with be learnt from: the outside set's tractates (Berakhot among them) and
   what the judged evaluations hold, with its links and neighbours, stay out.
+- --pool is the pool's searches (eval-pool/pool_spec.py's pool.json): the feedback's evaluation is in it and in no file
+  of the repository, and a judged search with the words of one of its searches is left out whole. The pool with the
+  judged evaluation's searches after its own is written as pool.json, for kaggle_run.py push pool. --learnt is a pairs
+  file an earlier model learnt (the feedback's pairs.jsonl of its run): a judged search with the words of one of its
+  queries is no evaluation search, since that model has seen it.
+- --train-share keeps only that share of the training searches, chosen by their words: to see whether more of them
+  help more.
 """
 
 import argparse
@@ -50,6 +57,11 @@ def in_evaluation(words: str, share: float) -> bool:
     return int(hashlib.sha1(words.encode()).hexdigest(), 16) % 1000 < share * 1000
 
 
+def in_share(words: str, share: float) -> bool:
+    """Whether a training search is one of --train-share's: by its words, and not by in_evaluation's digits."""
+    return int(hashlib.sha1(("share:" + words).encode()).hexdigest(), 16) % 1000 < share * 1000
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", type=Path, required=True)
@@ -59,6 +71,10 @@ def main() -> None:
     ap.add_argument("--eval-share", type=float, default=1 / 3)
     ap.add_argument("--release-old-benchmark", action="store_true",
                     help="the old benchmark's books and the Rambam halachot it asks with may be learnt from")
+    ap.add_argument("--pool", type=Path, help="the pool's searches (pool.json): a search with their words is left out")
+    ap.add_argument("--learnt", type=Path, action="append", default=[],
+                    help="a pairs file an earlier model learnt: a search with its queries' words is no evaluation search")
+    ap.add_argument("--train-share", type=float, default=1.0, help="only this share of the training searches")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
 
@@ -91,6 +107,12 @@ def main() -> None:
     def passage(line_id: int) -> str:
         return " ".join(clean(lines[line_id][3]).split()[:MAX_PASSAGE_WORDS])
 
+    # The pool as it was before a judged evaluation was merged into it
+    pool = [s for s in json.loads(args.pool.read_text("utf-8"))["searches"]
+            if not s["key"].startswith("judged/")] if args.pool else []
+    pool_words = {letters(s["query"]) for s in pool}
+    learnt_words = {letters(json.loads(line)["anchor"]) for path in args.learnt for line in path.open(encoding="utf-8")}
+
     dropped, pairs, spec, judged = Counter(), [], [], []
     seen = set()
     for q in sorted(grades):
@@ -102,7 +124,7 @@ def main() -> None:
             dropped["the same words as an earlier search"] += 1
             continue
         seen.add(words)
-        if held.query(query[q]):
+        if held.query(query[q]) or words in pool_words:
             dropped["an evaluation's query"] += 1
             continue
         graded = {line: grade for line, grade in grades[q].items() if line in lines}
@@ -111,6 +133,9 @@ def main() -> None:
             dropped["no good line"] += 1
             continue
         if in_evaluation(words, args.eval_share):
+            if words in learnt_words:
+                dropped["an evaluation search an earlier model learnt"] += 1
+                continue
             spec.append({"key": f"judged/{q}", "query": query[q], "candidates": sorted(graded)})
             judged += [(q, line, grade, source[(q, line)]) for line, grade in graded.items()]
             continue
@@ -127,12 +152,17 @@ def main() -> None:
         if not good:
             dropped["every good line held out"] += 1
             continue
+        if not in_share(words, args.train_share):
+            dropped["outside --train-share"] += 1
+            continue
         for line in good:
             pairs.append({"anchor": query[q], "positive": passage(line),
                           "type": f"judged-{source[(q, line)]}-{graded[line]}", "negatives": [passage(b) for b in bad]})
 
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "searches.json").write_text(json.dumps({"searches": spec}, ensure_ascii=False) + "\n", "utf-8")
+    if args.pool:
+        (args.out / "pool.json").write_text(json.dumps({"searches": pool + spec}, ensure_ascii=False) + "\n", "utf-8")
     with (args.out / "grades.tsv").open("w", encoding="utf-8") as f:
         f.write("qid\tlineId\tgrade\tfrom\n")
         for q, line, grade, where in judged:
