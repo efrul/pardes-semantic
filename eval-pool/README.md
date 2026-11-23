@@ -33,6 +33,9 @@
 - **הבדיקה:** על הדירוגים של `pool` גרסה 10 הוא נותן בדיוק את המספרים שם.
 - **חיפושי המשוב:** ה־`searches.json` של [`../feedback/collect.py`](../feedback/collect.py) נכנס ל־`pool.json` במקום חיפושי
   המשוב הקודמים, והציונים שלו הם ה־`grades.tsv` שלו (`--feedback`).
+- **החיפושים שנשפטו ב־[`../judge/`](../judge/README.md):** [`../judge/build_pairs.py`](../judge/build_pairs.py) `--pool`
+  כותב את המאגר עם ה־`searches.json` שלו אחרי שאר החיפושים, והציונים הם ה־`grades.tsv` שלו (`--judged`). השורות שם הן
+  של החבילה שהריצה את החיפושים, ולכן המודל שלה נקרא שם נמוך ממודל אחר.
 
 **חבילה, כמו שהאפליקציה מדרגת:** [`pack_ranks.py`](pack_ranks.py) מדרג את המועמדים לפי הווקטורים של החבילה (ה־`vecs.i8`
 של שלב `int8`), ואת השאילתה במודל ה־int8 שלה, כמו הצד הסמנטי של האפליקציה. מול הדירוג של אותו מודל ב־`pool`, שבו PyTorch
@@ -45,6 +48,7 @@
 - [`results-negatives.md`](results-negatives.md): מורה עם השליליים הקשים של שאלות האימון ושל המשוב, ותלמידיו.
 - [`results-teacher-v2.md`](results-teacher-v2.md): מורה v2, הקישורים הנקיים מהמבחנים עם Matryoshka, והכיוונון שלו.
 - [`results-layers.md`](results-layers.md): מה מגביל את התלמיד, 384 הממדים או 7 השכבות, ותלמיד של 12 שכבות.
+- [`results-judged.md`](results-judged.md): תלמיד שלומד מהזוגות של החיפושים שנשפטו ב־[`../judge/`](../judge/README.md).
 
 ## שאלות הפיתוח של האימון
 
