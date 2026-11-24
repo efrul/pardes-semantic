@@ -17,6 +17,8 @@
 | [`harness/Embed.kt`](harness/Embed.kt) | הדמיון של שאילתה לטקסטים, כמו שהאפליקציה מטמיעה אותם |
 | [`harness/Scope.kt`](harness/Scope.kt) | חיפושים בהיקפים של האפליקציה (ספרי יסוד, כל הספרים, קטגוריה מהשורה, לשונית של קטגוריה): המספר שמוצג, אורך הרשימה עד סופה, ממה העמוד הראשון בנוי והזמן של כל צד |
 | [`harness/Knn.kt`](harness/Knn.kt) | החיפוש לפי משמעות עם מסנן של קטגוריה, בכל שדה: בלי מסנן, החיפוש המסונן של Lucene, ובדיקה של כל השורות (הזמן, וכמה מ־150 הקרובות באמת נמצאו) |
+| [`harness/Votes.kt`](harness/Votes.kt) | סימונים על השורות הראשונות של חיפוש: וקטור השאילתה מוזז לפיהם, והחיפוש רץ שוב במנועים של האפליקציה ([`../eval-pool/results-votes.md`](../eval-pool/results-votes.md)) |
+| [`harness/QueryVectors.kt`](harness/QueryVectors.kt) | הווקטורים של שאילתות כמו שהאפליקציה מחשבת אותם, לבדיקה של סף שנמצא במודל האימון |
 | [`build.sh`](build.sh) | בונה את כל אלה (וגם את [`Eval.kt`](../eval-100/harness/Eval.kt)) בלי Gradle |
 | [`history.py`](history.py) | מוציא את החיפושים מ־`user_settings.db` של זית ושל פרדס ל־`history.tsv` |
 | [`analyze.py`](analyze.py) | ממה בנויה הרשימה בכל היקף, ודוח של כל חיפוש (`--report`) |
