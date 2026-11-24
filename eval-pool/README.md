@@ -67,6 +67,8 @@
   מעל הדף. הבדיקות החד־פעמיות שלו ב־[`probes/`](probes/README.md).
 - [`results-google.md`](results-google.md): המודלים של גוגל, EmbeddingGemma, מול המודל של דיקטה על אותם מבחנים.
 - [`results-votes.md`](results-votes.md): סימוני 👍 ו־👎 על התוצאות, והדף הבא שמסודר לפיהם: סימולציה של רעיון מאוצריא.
+- [`results-sefaria.md`](results-sefaria.md): הנושאים של ספריא והמקורות שלהם: מה יש שם, החיבור לשורות שלנו, והאם זה חומר
+  לאימון.
 
 ## שאלות הפיתוח של האימון
 
