@@ -26,6 +26,7 @@
 | [`st_prompts.py`](st_prompts.py) | מודל ממשפחה אחרת עם הוראות אחרות לפני השאילתה והשורה ([`../results-google.md`](../results-google.md)) |
 | [`fuse_ranks.py`](fuse_ranks.py) | קובצי דירוג של כמה מודלים כאחד: הציונים מתוקננים ומחוברים |
 | [`sefaria/`](sefaria/README.md) | הנתונים של ספריא: הנושאים, המקורות שלהם, והחיבור לשורות של הספרייה ([`../results-sefaria.md`](../results-sefaria.md)) |
+| [`torah-pairs/`](torah-pairs/README.md) | Torah-pairs: החיבור לשורות של הספרייה, ומה `tune3` יודע ממנו ([`../results-torah-pairs.md`](../results-torah-pairs.md)) |
 | [`votes.py`](votes.py) | סימונים על התוצאות של דף, והדף הבא בסדר של השאילתה המוזזת לפיהם ([`../results-votes.md`](../results-votes.md)) |
 | [`judged_pairs.py`](judged_pairs.py) | מודלים זוג מול זוג על החיפושים השפוטים, עם המקורות הידועים: טובה ראשונה, מקור ראשון, ומאיזה חלק של הספרייה |
 
