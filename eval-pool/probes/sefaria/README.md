@@ -27,6 +27,9 @@
 | [`agree.py`](agree.py) | כשחיפוש שנשפט קרוב לנושא: האם המקורות של הנושא הם השורות שקיבלו ציון טוב |
 | [`embed_pairs.py`](embed_pairs.py) | הווקטורים של `tune3` למדגם של זוגות, עד שמונה לנושא, בלי שורות שמבחן מדרג |
 | [`topic_map.py`](topic_map.py) | מטריצה אחת מעל הווקטורים הקפואים שנלמדת מהזוגות, וקובצי דירוג של המבחנים שלנו איתה |
+| [`descriptions.py`](descriptions.py) | המקורות שנכתב להם תיאור בעברית: האם `tune3` מוצא מקור לפי הכותרת והתיאור שלו |
+| [`sugyot.py`](sugyot.py) | החלוקה של הבבלי לסוגיות על השורות שלנו, ודירוג לפי סוגיה ב־crfh1672 |
+| [`lexicon.py`](lexicon.py) | המילונים שבגיבוי מול המילים של הבבלי |
 
 ```
 python -I eval-pool/probes/sefaria/links.py
@@ -37,6 +40,9 @@ python -I eval-pool/probes/sefaria/match.py
 python eval-pool/probes/sefaria/hard.py
 python eval-pool/probes/sefaria/agree.py
 python eval-pool/probes/sefaria/embed_pairs.py 8
+python eval-pool/probes/sefaria/descriptions.py 20000
+python eval-pool/probes/sefaria/sugyot.py build/rerank/vec-tune3-base.npz
+python -I eval-pool/probes/sefaria/lexicon.py
 python eval-pool/probes/sefaria/topic_map.py [--origins sefaria,learning-team,sefer-haagada --out build/sefaria/ranks-curated]
 python eval-crfh/measure.py build/sefaria/ranks/ranks-tune3-base.json build/sefaria/ranks/ranks-topics-base.json
 ```
