@@ -27,6 +27,8 @@
 | [`fuse_ranks.py`](fuse_ranks.py) | קובצי דירוג של כמה מודלים כאחד: הציונים מתוקננים ומחוברים |
 | [`sefaria/`](sefaria/README.md) | הנתונים של ספריא: הנושאים, המקורות שלהם, והחיבור לשורות של הספרייה ([`../results-sefaria.md`](../results-sefaria.md)) |
 | [`torah-pairs/`](torah-pairs/README.md) | Torah-pairs: החיבור לשורות של הספרייה, ומה `tune3` יודע ממנו ([`../results-torah-pairs.md`](../results-torah-pairs.md)) |
+| [`marks_reach.py`](marks_reach.py) | כמה מהחיפושים חוזרים אצל אותו אדם, וכמה מהם עשה גם אדם אחר: לאן זיכרון של סימונים היה מגיע |
+| [`marks_transfer.py`](marks_transfer.py) | כשאותו צורך חוזר, האם הסימונים של הפעם הקודמת נכונים גם עכשיו |
 | [`votes.py`](votes.py) | סימונים על התוצאות של דף, והדף הבא בסדר של השאילתה המוזזת לפיהם ([`../results-votes.md`](../results-votes.md)) |
 | [`judged_pairs.py`](judged_pairs.py) | מודלים זוג מול זוג על החיפושים השפוטים, עם המקורות הידועים: טובה ראשונה, מקור ראשון, ומאיזה חלק של הספרייה |
 
