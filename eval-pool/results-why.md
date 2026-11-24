@@ -53,6 +53,16 @@
 - **התת־מודול** מצביע מ־2026-11-24 על `main` של פרדס. `PARDES=<נתיב>` ב־[`../search-order/build.sh`](../search-order/build.sh)
   בונה את ה־harness מעותק אחר, למדידה של ענף.
 
+המדידה, עם עותק של פרדס שהמדרג בנוי בו. התיקייה `pardes-reranker/` ליד הספרייה מדליקה אותו:
+
+```
+PARDES=<פרדס> bash search-order/build.sh build/harness-rr
+python reranker/build_reranker.py --out build/pardes-reranker
+java -cp "$(cat build/harness-rr/classpath.txt)" EvalKt build/library/seforim.db build/judge/queries.tsv build/rerank/run-judge-base.jsonl
+ln -s "$PWD/build/pardes-reranker" build/library/pardes-reranker
+java -cp "$(cat build/harness-rr/classpath.txt)" EvalKt build/library/seforim.db build/judge/queries.tsv build/rerank/run-judge-rr.jsonl
+```
+
 ## מה נמדד, ועל מה
 
 - **451 החיפושים השפוטים** במצב `ok` ([`../judge/`](../judge/README.md)). לכל אחד שש השורות הראשונות של הדף של חבילה
