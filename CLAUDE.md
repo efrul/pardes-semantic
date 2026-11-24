@@ -10,6 +10,9 @@ the benchmark and evaluations, the Kaggle and Colab runs, the vectors and index 
 The trained models are this repository's releases (`models.yml`, `release_model.py`). Until 2026-11-05 this was the
 `semantic-model/` folder of efrul/Pardes, whose history came with it.
 
+`reranker/` builds the reranker of a results page's first lines (a trial since 2026-11-24): a ready-made model of the
+Hub (Horizon Labs' multilingual-reranker-small, Apache-2.0), quantized and its vocabulary cut here, never trained here.
+
 The app's side stays in Pardes:
 - the search code in `SeforimApp/src/jvmMain/kotlin/io/github/kdroidfilter/seforimapp/features/search/semantic/`;
 - the documents `SEMANTIC_SEARCH.md` and `docs/SEMANTIC_PLAN.md`;
@@ -59,6 +62,12 @@ Not `--recursive`: of Pardes's submodules only SeforimLibrary is needed.
     which Pardes for Android shows in its licences: a change here is made there too.
   - The training data's licences and permissions are in `TRAINING_PLAN.md`, רישוי. A new source gets its line there,
     and its credit in `NOTICE.md`, before a model learns from it.
+  - The reranker is Apache-2.0: the source's own `LICENSE` and `NOTICE` go into its folder with `NOTICE.md`
+    (`reranker/build_reranker.py` copies them), and `NOTICE.md` says what Pardes changed in it.
+- **The harness runs the `pardes` submodule's code** (`search-order/build.sh`, `eval-100/harness/`). Before a run that
+  is to show what users see, move the submodule to Pardes's `main`: on 2026-11-22 it was 17 days behind, and the pages
+  judged then were an older fusion's (`eval-pool/results-why.md`, the correction). `PARDES=<path>` builds from another
+  checkout.
 - **Git:**
   - Commit as `efrul <342689225+efrul@users.noreply.github.com>`, author and committer, with `-s`. Never commit as
     Claude or as a local identity.

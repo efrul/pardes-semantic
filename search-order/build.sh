@@ -6,6 +6,7 @@
 # so they search as the app does).
 #
 #   build.sh OUT_DIR
+#   PARDES=/path/to/Pardes build.sh OUT_DIR     # another checkout of Pardes than the submodule: a branch being measured
 #
 # Needs a JDK 21 (JAVA, or java on PATH), patch and curl. The jars come from the Gradle cache when they are there, from
 # Maven Central otherwise. On Windows (Git Bash) give an OUT_DIR whose path has only ASCII letters: Java misreads other
@@ -16,7 +17,7 @@ set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/.." && pwd)"
 # Pardes, whose engines these programs run: this repository's pardes submodule, and SeforimLibrary in it
-repo="$root/pardes"
+repo="${PARDES:-$root/pardes}"
 if [ ! -d "$repo/SeforimApp" ] || [ ! -d "$repo/SeforimLibrary/search" ]; then
     echo "Check out Pardes first: git submodule update --init pardes && git -C pardes submodule update --init SeforimLibrary" >&2
     exit 1
