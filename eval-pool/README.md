@@ -41,7 +41,8 @@
 **מודל ממשפחה אחרת, ומדרג** (2026-11-23): כדי למדוד מורה אפשרי שאינו של דיקטה, ומה מודל שני מעל התוצאות הראשונות
 היה נותן.
 - **מודל הטמעה מה־Hub:** `pool_rank.py --st <שם>` (ב־`kaggle_run.py`: `--models st:Qwen/Qwen3-Embedding-4B@merge+strip`).
-  השורות בלי ניקוד וטעמים, והשאילתות אחרי ה־prompt של המודל עצמו.
+  השורות בלי ניקוד וטעמים, והשאילתות אחרי ה־prompt של המודל עצמו. `--st-doc-prompt document` שם גם לפני כל שורה את
+  ה־prompt של המודל בשם הזה, למשפחה שיש לה כזה (EmbeddingGemma, [`results-google.md`](results-google.md)).
 - **מדרג:** [`../pool_rerank.py`](../pool_rerank.py) מסדר מחדש את N המועמדים הראשונים של כל חיפוש בסדר של מודל אחד
   (`kaggle_run.py --rerank Qwen/Qwen3-Reranker-4B --rerank-top 20 --rerank-base tune3-tuned-merge-strip`). המדרג קורא
   את השאילתה והשורה יחד. `--rerank-only` מגביל לחיפושים שהמפתח שלהם מתחיל כך. כמה מדרגים בריצה אחת: שמותיהם
@@ -64,6 +65,7 @@
 - [`results-judged.md`](results-judged.md): תלמיד שלומד מהזוגות של החיפושים שנשפטו ב־[`../judge/`](../judge/README.md).
 - [`results-why.md`](results-why.md): למה הזוגות האלה לא שיפרו בהרבה, ומה כן משפר: זיכרון של החיפושים השפוטים, ומדרג
   מעל הדף. הבדיקות החד־פעמיות שלו ב־[`probes/`](probes/README.md).
+- [`results-google.md`](results-google.md): המודלים של גוגל, EmbeddingGemma, מול המודל של דיקטה על אותם מבחנים.
 
 ## שאלות הפיתוח של האימון
 

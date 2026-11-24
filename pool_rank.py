@@ -11,7 +11,8 @@ ranking by the vectors' first 384 dimensions, renormalized (a model trained with
 ranks-teacher-d384.json.
 
 --st NAME: another family's embedder instead, a sentence-transformers model of the Hub (hub_score.py): the lines as
-they are, without the Hebrew points and accents, and the queries after the model's own "query" prompt.
+they are, without the Hebrew points and accents, and the queries after the model's own "query" prompt. --st-doc-prompt
+document: the lines after the model's prompt of that name too, for a family that has one (EmbeddingGemma).
 """
 
 import argparse
@@ -35,6 +36,7 @@ def main() -> None:
     ap.add_argument("--source", help="a local model (train_model.py, distill_model.py), not the Dicta one")
     ap.add_argument("--st", help="a sentence-transformers model of the Hub instead, another family's (hub_score.py)")
     ap.add_argument("--st-batch", type=int, default=8)
+    ap.add_argument("--st-doc-prompt", help="--st: the model's prompt before each line, by its name (\"document\")")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--dtype", default="float16")
     ap.add_argument("--batch-tokens", type=int, default=8192, help="padded tokens per batch")
@@ -84,7 +86,8 @@ def main() -> None:
         import hub_score
         docs = sorted(texts)
         lines = [hub_score.plain(texts[d][len(m.DOCUMENT_PREFIX):]) for d in docs]
-        vectors = dict(zip(docs, hub_score.embed(args.st, lines, None, args.dtype, args.st_batch, m.DOCUMENT_MAX_TOKENS)))
+        vectors = dict(zip(docs, hub_score.embed(args.st, lines, args.st_doc_prompt, args.dtype, args.st_batch,
+                                                 m.DOCUMENT_MAX_TOKENS)))
         qv = hub_score.embed(args.st, [hub_score.plain(s["query"]) for s in searches], "query", args.dtype, 32,
                              m.QUERY_MAX_TOKENS)
     elif args.doc_source:

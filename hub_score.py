@@ -51,7 +51,9 @@ def _device_and_dtype(dtype: str):
 def embed_here(model: str, texts: list[str], prompt: str | None, dtype: str, batch: int, max_tokens: int) -> np.ndarray:
     from sentence_transformers import SentenceTransformer
     device, torch_dtype = _device_and_dtype(dtype)
-    st = SentenceTransformer(model, device=device, model_kwargs={"torch_dtype": torch_dtype})
+    # EmbeddingGemma 2 reads pictures and sound too: its text part alone is loaded (its card, Selective Encoder Loading)
+    text_only = {"config_kwargs": {"vision_config": None, "audio_config": None}} if "embeddinggemma-2" in model.lower() else {}
+    st = SentenceTransformer(model, device=device, model_kwargs={"torch_dtype": torch_dtype}, **text_only)
     st.max_seq_length = max_tokens
     if prompt and prompt not in (st.prompts or {}):
         print(f"{model} has no '{prompt}' prompt: the texts as they are", flush=True)
