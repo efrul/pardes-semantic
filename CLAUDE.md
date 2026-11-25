@@ -59,6 +59,10 @@ Not `--recursive`: of Pardes's submodules only SeforimLibrary is needed.
     which Pardes for Android shows in its licences: a change here is made there too.
   - The training data's licences and permissions are in `TRAINING_PLAN.md`, רישוי. A new source gets its line there,
     and its credit in `NOTICE.md`, before a model learns from it.
+- **Save the working data after every step:** a file no repository may hold (pairs, kept-out tests, what a miner
+  found, a reranker's scores, ranks) goes to the account's private Kaggle dataset `pardes-semantic-work` with
+  `save_work.py`, before the next step: the session's container is reclaimed. Never a user's data. The skill's
+  "Saving the working data" has the details.
 - **The harness runs the `pardes` submodule's code** (`search-order/build.sh`, `eval-100/harness/`). Before a run that
   is to show what users see, move the submodule to Pardes's `main`: on 2026-11-22 it was 17 days behind, and the pages
   judged then were an older fusion's (`eval-pool/results-why.md`, the correction). `PARDES=<path>` builds from another

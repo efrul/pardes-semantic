@@ -41,6 +41,7 @@ package or its model.
 | Benchmark | `build_eval_set.py --db … --out build/eval` | CPU | `corpus.jsonl`, `queries.jsonl` |
 | Training pairs | `build_train_pairs.py --db … --out build/train/pairs.jsonl` | CPU | 400k query/passage pairs from the links |
 | Hard negatives (optional) | `mine_hard_negatives.py queries`, `search-order/harness/Mine.kt`, `mine_hard_negatives.py candidates`, a reranker in `kaggle_run.py push pool`, then `mine_hard_negatives.py apply` | CPU, then GPU | the pairs with lines the model puts first that a reranker reads as no answer |
+| Save (after every step) | `save_work.py <files> -m "what"` | anywhere | the working files no repository holds, in the private dataset `pardes-semantic-work` |
 | Fine-tune (optional) | `train_model.py --pairs … --out build/teacher` | GPU | sentence-transformers model |
 | Distill (optional) | `distill_model.py --teacher build/teacher --pairs … --out build/student` | GPU | 7 layers, 384 dims |
 | Export | `export_onnx.py [--source build/student] --out build/model` | CPU | `model.int8.onnx`, `tokenizer.json`, `pardes-model.json` |
