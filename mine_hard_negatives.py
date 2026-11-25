@@ -1,18 +1,20 @@
 """Hard negatives for pairs whose passage is a line of the library: the lines the pack's model puts first for a pair's
 query over the whole library, of which a reranker keeps only those that do not answer it.
 
-    python mine_hard_negatives.py queries --pairs build/train/torah-pairs.jsonl --out build/train/mine-queries.jsonl
+    python mine_hard_negatives.py queries --pairs build/train/collection-pairs.jsonl \
+        --out build/train/mine-queries.jsonl
     java -cp "$(cat build/harness/classpath.txt)" MineKt seforim.db build/train/mine-queries.jsonl build/train/mined.jsonl 100 4
-    python mine_hard_negatives.py candidates --db seforim.db --pairs build/train/torah-pairs.jsonl \
+    python mine_hard_negatives.py candidates --db seforim.db --pairs build/train/collection-pairs.jsonl \
         --mined build/train/mined.jsonl --tag t --out build/train/denoise-t.json [--hold ...] [--hold-lines test.jsonl ...]
     python kaggle_run.py push pool --as pooln --spec <the specs merged> --models tune3/tuned@merge+strip \
         --rerank Horizon-Labs/multilingual-reranker-small --rerank-top 5 ...
-    python mine_hard_negatives.py apply --db seforim.db --pairs build/train/torah-pairs.jsonl --tag t \
-        --spec build/train/denoise-t.json --scores ranks-...-multilingual-reranker-small.json --out build/train/torah-pairs-neg.jsonl
+    python mine_hard_negatives.py apply --db seforim.db --pairs build/train/collection-pairs.jsonl --tag t \
+        --spec build/train/denoise-t.json --scores ranks-...-multilingual-reranker-small.json \
+        --out build/train/collection-pairs-neg.jsonl
 
 Why a reranker: the library says the same thing in many places (the Gemara, the Rambam that codifies it, its
 commentaries, a later book that quotes them, the Mishnah in two editions), and a pair names one of them. Of 24 lines the
-model put first and below the pair's own line, read by hand (eval-pool/results-torah-pairs.md), 9 answered the question
+model put first and below the pair's own line, read by hand (eval-pool/results-collection.md), 9 answered the question
 and 7 more were close to it: taken as negatives, they would teach the model to push answers away. The positive-aware
 rule alone (NV-Retriever, Moreira et al. 2024: a line below 95% of the pair's own score) does not tell them apart,
 since the pair's own line is often not the best answer. A cross-encoder reads the query with each line, as RocketQA
@@ -23,8 +25,8 @@ candidates: for each pair, its own line and the first K lines the model found th
   commentary on it, another on the same line, the same law in a code and its commentaries); a passage with more than
   SECOND_HOP links gets none, its parallels being too many to tell;
 - no line that holds a run of RUN words of the passage (a quote of it, the same text elsewhere);
-- nothing an evaluation measures (build_torah_pairs.py's Guard), no line of a kept-out test nor near one (--hold-lines:
-  a model pushed away from a test's line would be measured unfairly on it), long enough to be a passage;
+- nothing an evaluation measures (build_collection_pairs.py's Guard), no line of a kept-out test nor near one
+  (--hold-lines: a model pushed away from a test's line would be measured unfairly on it), long enough to be a passage;
 - for a statement of Mikropedia Talmudit's (TORAH-MICROPEDIA), not a line of that book: the statement is one of its
   lines, and its other lines restate laws with their sources.
 They are written as a pool spec (eval-pool/pool_spec.py's format), the key "<tag>/<row>", for the pool stage's reranker.
@@ -42,7 +44,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "train-v2"))
-from build_torah_pairs import Guard  # noqa: E402
+from build_collection_pairs import Guard  # noqa: E402
 from build_train_pairs import MAX_PASSAGE_WORDS, MIN_WORDS  # noqa: E402
 from pardes_semantic.clean import clean  # noqa: E402
 from sample_targets import neighbors  # noqa: E402

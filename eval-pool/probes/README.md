@@ -26,7 +26,7 @@
 | [`st_prompts.py`](st_prompts.py) | מודל ממשפחה אחרת עם הוראות אחרות לפני השאילתה והשורה ([`../results-google.md`](../results-google.md)) |
 | [`fuse_ranks.py`](fuse_ranks.py) | קובצי דירוג של כמה מודלים כאחד: הציונים מתוקננים ומחוברים |
 | [`sefaria/`](sefaria/README.md) | הנתונים של ספריא: הנושאים, המקורות שלהם, והחיבור לשורות של הספרייה ([`../results-sefaria.md`](../results-sefaria.md)) |
-| [`torah-pairs/`](torah-pairs/README.md) | Torah-pairs: החיבור לשורות של הספרייה, ומה `tune3` יודע ממנו ([`../results-torah-pairs.md`](../results-torah-pairs.md)) |
+| [`collection/`](collection/README.md) | האוסף: החיבור לשורות של הספרייה, ומה `tune3` יודע ממנו ([`../results-collection.md`](../results-collection.md)) |
 | [`marks_reach.py`](marks_reach.py) | כמה מהחיפושים חוזרים אצל אותו אדם, וכמה מהם עשה גם אדם אחר: לאן זיכרון של סימונים היה מגיע |
 | [`marks_transfer.py`](marks_transfer.py) | כשאותו צורך חוזר, האם הסימונים של הפעם הקודמת נכונים גם עכשיו |
 | [`votes.py`](votes.py) | סימונים על התוצאות של דף, והדף הבא בסדר של השאילתה המוזזת לפיהם ([`../results-votes.md`](../results-votes.md)) |

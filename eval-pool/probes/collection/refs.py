@@ -1,4 +1,5 @@
-"""Torah-pairs' passages mapped to our lines by their Hebrew reference, whatever the book's id: how many, and is the text ours?"""
+"""The private collection's passages mapped to our lines by their Hebrew reference, whatever the book's id: how many,
+and is the text ours?"""
 import collections, json, pickle, random, re, sqlite3, sys
 sys.path.insert(0, ".")
 from pardes_semantic.clean import clean
@@ -14,11 +15,12 @@ for line_id, he in con.execute("SELECT id, heRef FROM line WHERE heRef IS NOT NU
 print(len(ours), "references of ours", flush=True)
 random.seed(4)
 out = {}
-for name, qf in (("torahqa.clean", "question"), ("micropedia", "query"), ("et", "query"), ("shut_passages", "query"), ("mafteach", "abstract")):
+for name, qf in (("qa", "question"), ("micropedia", "query"), ("encyclopedia", "query"), ("topics", "query"),
+                 ("indexes", "abstract")):
     n = found = same = checked = 0
     conf = collections.Counter(); roles = collections.Counter(); books = collections.Counter(); qlen = []
     rows = []
-    with open(f"build/torah-pairs/{name}.jsonl", encoding="utf-8") as f:
+    with open(f"build/collection/{name}.jsonl", encoding="utf-8") as f:
         for line in f:
             d = json.loads(line); n += 1
             p = d.get("passage") if isinstance(d.get("passage"), dict) else {}
@@ -39,4 +41,4 @@ for name, qf in (("torahqa.clean", "question"), ("micropedia", "query"), ("et", 
     print("   confidence:", conf.most_common(5), "| roles:", roles.most_common(6))
     print("   words in the query: median", qlen[len(qlen)//2] if qlen else None, "| top books:", [b for b, _ in books.most_common(8)])
     out[name] = rows
-pickle.dump(out, open("build/torah-pairs/mapped.pkl", "wb"))
+pickle.dump(out, open("build/collection/mapped.pkl", "wb"))

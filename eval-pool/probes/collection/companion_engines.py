@@ -1,8 +1,8 @@
-"""The borer package's collected file (questions with passages marked as belonging or not): how many, and which engine
-proposed each passage. A passage only Zayit's engine proposed comes from Zayit's semantic search, which this
+"""The companion package's collected file (questions with passages marked as belonging or not): how many, and which
+engine proposed each passage. A passage only Zayit's engine proposed comes from Zayit's semantic search, which this
 repository uses nothing of (CLAUDE.md): such passages are counted apart, to be left out.
 
-    python -I eval-pool/probes/torah-pairs/borer_engines.py build/borer/data/collected/train.jsonl
+    python -I eval-pool/probes/collection/companion_engines.py build/companion/data/collected/train.jsonl
 """
 import collections
 import json

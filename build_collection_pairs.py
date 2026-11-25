@@ -1,11 +1,11 @@
-"""Training pairs from Torah-pairs (TRAINING_PLAN.md, רישוי): a question, or the topic of a responsum, as the query, and
-the line of the library that answers it as the passage to find. Its queries are a reader's own way of asking ("מה
-הדין..."), which the links' pairs lack, and each points at a line of ours by its reference.
+"""Training pairs from the private collection (TRAINING_PLAN.md, רישוי): a question, or the topic of a responsum, as
+the query, and the line of the library that answers it as the passage to find. Its queries are a reader's own way of
+asking ("מה הדין..."), which the links' pairs lack, and each points at a line of ours by its reference.
 
-    python build_torah_pairs.py --db seforim.db --dir build/torah-pairs --out build/train/torah-pairs.jsonl \
-        [--take torahqa.clean=40000,shut_passages=10000] [--test 3000] [--hold pool.json ...] [--seed 5811]
-        [--keep-test build/train/torah-pairs-test.jsonl]    # pairs of another file, the first run's test kept out
-        [--avoid-in-test build/train/torah-pairs.jsonl]     # and its test clear of the lines the first run learns
+    python build_collection_pairs.py --db seforim.db --dir build/collection --out build/train/collection-pairs.jsonl \
+        [--take qa=40000,topics=10000] [--test 3000] [--hold pool.json ...] [--seed 5811]
+        [--keep-test build/train/collection-pairs-test.jsonl]    # pairs of another file, the first run's test kept out
+        [--avoid-in-test build/train/collection-pairs.jsonl]     # and its test clear of the lines the first run learns
 
 The files themselves are not in this repository and are not passed on (CLAUDE.md): they are read from --dir, and what
 this writes stays under build/. Only the two files the user chose are read by default (2026-11-24): the questions with
@@ -42,8 +42,8 @@ from sample_targets import NEAR, held_book_texts, held_out, neighbors, outside_s
 PER_LINE = 2
 QUERY_WORDS = (3, 60)
 # The field of a row that is its query, and the name its pairs carry
-FILES = {"torahqa.clean": ("question", "TORAH-QA"), "shut_passages": ("query", "TORAH-SHUT"),
-         "micropedia": ("query", "TORAH-MICROPEDIA"), "et": ("query", "TORAH-ET")}
+FILES = {"qa": ("question", "TORAH-QA"), "topics": ("query", "TORAH-SHUT"),
+         "micropedia": ("query", "TORAH-MICROPEDIA"), "encyclopedia": ("query", "TORAH-ET")}
 CONFIDENT = {"high", "exact", "strong"}
 MARKS = re.compile(r"[֑-ׇ]")
 
@@ -107,9 +107,9 @@ class Guard:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", type=Path, required=True)
-    ap.add_argument("--dir", type=Path, required=True, help="the folder of Torah-pairs' .jsonl files")
+    ap.add_argument("--dir", type=Path, required=True, help="the folder of the private collection's .jsonl files")
     ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--take", default="torahqa.clean=40000,shut_passages=10000",
+    ap.add_argument("--take", default="qa=40000,topics=10000",
                     help="comma separated: <file>=<pairs at most>")
     ap.add_argument("--test", type=int, default=3000, help="pairs kept out whole, written beside --out")
     ap.add_argument("--hold", type=Path, action="append", default=[],

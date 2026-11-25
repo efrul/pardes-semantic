@@ -1,5 +1,5 @@
-"""A linear map on the pack's model's frozen vectors, learnt from Torah-pairs (a question or a claim -> the line of ours
-that answers it), and what it does to questions and lines it did not see and to our own evaluations.
+"""A linear map on the pack's model's frozen vectors, learnt from the private collection (a question or a claim -> the
+line of ours that answers it), and what it does to questions and lines it did not see and to our own evaluations.
 
 One matrix over the vectors, queries' and lines' alike (x + xW), in-batch negatives, as probes/sefaria/topic_map.py. A
 tenth of the pairs is kept out: their questions and their lines are not learnt from.
@@ -10,14 +10,14 @@ import numpy as np, torch
 sys.path[:0] = ["."]
 import pool_rank
 ap = argparse.ArgumentParser()
-ap.add_argument("--pairs", default="build/torah-pairs/pairs-tune3.npz")
+ap.add_argument("--pairs", default="build/collection/pairs-tune3.npz")
 ap.add_argument("--steps", type=int, default=3000)
 ap.add_argument("--batch", type=int, default=512)
 ap.add_argument("--lr", type=float, default=1e-3)
 ap.add_argument("--decay", type=float, default=1e-2)
 ap.add_argument("--temp", type=float, default=0.05)
 ap.add_argument("--sources", default="", help="comma separated: learn only from these files' pairs")
-ap.add_argument("--out", default="build/torah-pairs/ranks")
+ap.add_argument("--out", default="build/collection/ranks")
 args = ap.parse_args()
 torch.manual_seed(5786); torch.set_num_threads(4)
 z = np.load(args.pairs, allow_pickle=True)

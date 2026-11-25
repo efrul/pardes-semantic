@@ -1,4 +1,5 @@
-"""The pack's model's vectors of a sample of Torah-pairs: each query and the line of ours its passage points at."""
+"""The pack's model's vectors of a sample of the private collection: each query and the line of ours its passage
+points at."""
 import collections, json, pickle, random, re, sqlite3, sys, time
 import numpy as np, torch
 sys.path[:0] = ["."]
@@ -10,8 +11,8 @@ torch.set_num_threads(4)
 MARKS = re.compile("[֑-ׇ]")
 def norm(s):
     return " ".join(MARKS.sub("", s or "").replace("־", " ").split())
-TAKE = {"torahqa.clean": 12000, "micropedia": 5000, "et": 5000, "shut_passages": 4000}
-mapped = pickle.load(open("build/torah-pairs/mapped.pkl", "rb"))
+TAKE = {"qa": 12000, "micropedia": 5000, "encyclopedia": 5000, "topics": 4000}
+mapped = pickle.load(open("build/collection/mapped.pkl", "rb"))
 held = set()
 for path in ("build/rerank/pool-base.json", "build/why/spec-know.json"):
     for s in json.load(open(path))["searches"]:
@@ -44,7 +45,7 @@ print(len(vec), "lines embedded in", round((time.time() - t0) / 60, 1), "min", f
 chosen = [c for c in chosen if c[2] in vec]
 Q = pool_rank.embed_queries(loaded, [m.QUERY_PREFIX + c[1] for c in chosen])
 docs = sorted(vec)
-np.savez("build/torah-pairs/pairs-tune3.npz", queries=Q.astype(np.float32), source=np.array([c[0] for c in chosen]),
+np.savez("build/collection/pairs-tune3.npz", queries=Q.astype(np.float32), source=np.array([c[0] for c in chosen]),
          line=np.array([c[2] for c in chosen], dtype=np.int64), doc_ids=np.array(docs, dtype=np.int64),
          docs=np.stack([vec[d] for d in docs]).astype(np.float32))
-print(len(chosen), "pairs -> build/torah-pairs/pairs-tune3.npz", flush=True)
+print(len(chosen), "pairs -> build/collection/pairs-tune3.npz", flush=True)

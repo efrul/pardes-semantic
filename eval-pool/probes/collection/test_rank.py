@@ -1,21 +1,21 @@
-"""A model on the questions build_torah_pairs.py kept out: each question's own line among the kept lines and other
+"""A model on the questions build_collection_pairs.py kept out: each question's own line among the kept lines and other
 lines of the same books.
 
-    python eval-pool/probes/torah-pairs/test_rank.py <model dir> <name> [--others 20000] [--test <-test.jsonl>]
-    python eval-pool/probes/torah-pairs/test_rank.py --compare <name> <name> [--test <-test.jsonl>]
+    python eval-pool/probes/collection/test_rank.py <model dir> <name> [--others 20000] [--test <-test.jsonl>]
+    python eval-pool/probes/collection/test_rank.py --compare <name> <name> [--test <-test.jsonl>]
 
-The candidates are chosen once for a test (beside it: build/train/torah-pairs-test-cands.json for the first) and are
-the same for every model: the kept lines, and lines drawn from their books, none within three lines of a kept line (a
-neighbour may answer too). Writes <test>-<name>.npz beside the test (build/train/torah-pairs-test-<name>.npz), the place
-of each question's line; --compare pairs two models question by question, against twice the noise. --test: another
-test build_torah_pairs.py kept out (micropedia's, of the second run).
+The candidates are chosen once for a test (beside it: build/train/collection-pairs-test-cands.json for the first) and
+are the same for every model: the kept lines, and lines drawn from their books, none within three lines of a kept line
+(a neighbour may answer too). Writes <test>-<name>.npz beside the test (build/train/collection-pairs-test-<name>.npz),
+the place of each question's line; --compare pairs two models question by question, against twice the noise. --test:
+another test build_collection_pairs.py kept out (micropedia's, of the second run).
 """
 import argparse, collections, json, math, random, sqlite3, sys, time
 from pathlib import Path
 
 import numpy as np
 
-TEST = Path("build/train/torah-pairs-test.jsonl")
+TEST = Path("build/train/collection-pairs-test.jsonl")
 
 
 def result(test: Path, name: str) -> Path:
