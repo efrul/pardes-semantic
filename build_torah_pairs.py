@@ -4,6 +4,8 @@ the line of the library that answers it as the passage to find. Its queries are 
 
     python build_torah_pairs.py --db seforim.db --dir build/torah-pairs --out build/train/torah-pairs.jsonl \
         [--take torahqa.clean=40000,shut_passages=10000] [--test 3000] [--hold pool.json ...] [--seed 5811]
+        [--keep-test build/train/torah-pairs-test.jsonl]    # pairs of another file, the first run's test kept out
+        [--avoid-in-test build/train/torah-pairs.jsonl]     # and its test clear of the lines the first run learns
 
 The files themselves are not in this repository and are not passed on (CLAUDE.md): they are read from --dir, and what
 this writes stays under build/. Only the two files the user chose are read by default (2026-11-24): the questions with
@@ -46,12 +48,60 @@ CONFIDENT = {"high", "exact", "strong"}
 MARKS = re.compile(r"[֑-ׇ]")
 
 
+def lines_at(con, ids):
+    """(line id, book id, line index) of [ids]."""
+    ids = sorted(ids)
+    for i in range(0, len(ids), 900):
+        chunk = ids[i:i + 900]
+        yield from con.execute(f"SELECT id, bookId, lineIndex FROM line WHERE id IN ({','.join('?' * len(chunk))})", chunk)
+
+
 def ref_key(ref: str | None) -> str:
     return re.sub(r"[ ,]", "", ref or "")
 
 
 def plain(text: str) -> str:
     return " ".join(MARKS.sub("", text or "").replace("־", " ").split())
+
+
+class Guard:
+    """What an evaluation measures, which no pair may touch (build_chavruta_pairs.py's rules): a line of the benchmark's
+    books or of crfh1672/search-queries' tractates, one an evaluation judges or targets, linked to one or near one, near
+    a dev question's target, a copy of a held book's line, a quote's source; with [hold], a line a pool's searches rank,
+    and with [hold_grades], a line a grades.tsv grades."""
+
+    def __init__(self, con, hold=(), hold_grades=()):
+        self.held_books, self.held_lines = benchmark_held(con)
+        self.held_books |= outside_set_books(con)
+        self.held_texts = held_book_texts(con, self.held_books)
+        judged, self.patterns, quotes = held_out(con)
+        for path in hold_grades:
+            judged |= {int(r["lineId"]) for r in csv.DictReader(path.open(encoding="utf-8"), delimiter="\t",
+                                                               quoting=csv.QUOTE_NONE)}
+        self.linked, self.near = neighbors(con, judged)
+        dev = {int(q["target_line"]) for q in read_tsv(HERE / "train-v2" / "questions.tsv") if q["batch"] in DEV_BATCHES}
+        self.dev_linked, self.dev_near = neighbors(con, dev)
+        self.quotes = [q for q in quotes if q]
+        self.ranked = set()
+        for path in hold:
+            for s in json.loads(path.read_text("utf-8"))["searches"]:
+                self.ranked.update(s["candidates"])
+        print(f"{len(self.held_books)} books held out, {len(self.linked)} lines judged or linked to one, "
+              f"{len(self.ranked)} lines a pool ranks", file=sys.stderr)
+
+    def left_out(self, lid: int, row) -> str | None:
+        """Why the line [lid] ([row]: its book, index, reference and content) stays out, or None when it may be used."""
+        book, index, ref, content = row
+        if (lid in self.held_lines or book in self.held_books or lid in self.linked or (book, index) in self.near
+                or lid in self.dev_linked or (book, index) in self.dev_near or lid in self.ranked
+                or (ref and any(pt.search(ref) for pt in self.patterns))):
+            return "near what an evaluation measures"
+        if clean(content) in self.held_texts:
+            return "a copy of a held book's line"
+        bare = " ".join(re.sub(r"[^א-ת ]", " ", MARKS.sub("", content.replace("־", " "))).split())
+        if any(q in bare for q in self.quotes):
+            return "holds a quote's source"
+        return None
 
 
 def main() -> None:
@@ -66,40 +116,38 @@ def main() -> None:
                     help="a pool spec (eval-pool/pool_spec.py's): no line its searches rank; repeatable")
     ap.add_argument("--hold-grades", type=Path, action="append", default=[],
                     help="a grades.tsv (qid, lineId, ...): no line it grades; repeatable")
+    ap.add_argument("--keep-test", type=Path, action="append", default=[],
+                    help="an earlier run's -test.jsonl: its queries, its lines and the lines near them stay out; repeatable")
+    ap.add_argument("--avoid-in-test", type=Path, action="append", default=[],
+                    help="pairs another run learns: no line of them, nor one near, is a test pair here; repeatable")
     ap.add_argument("--seed", type=int, default=5811)
     args = ap.parse_args()
     rng = random.Random(args.seed)
     take = {name: int(n) for name, n in (part.split("=") for part in args.take.split(","))}
     con = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
 
-    held_books, held_lines = benchmark_held(con)
-    held_books |= outside_set_books(con)
-    held_texts = held_book_texts(con, held_books)
-    judged, patterns, quotes = held_out(con)
-    for path in args.hold_grades:
-        judged |= {int(r["lineId"]) for r in csv.DictReader(path.open(encoding="utf-8"), delimiter="\t",
-                                                           quoting=csv.QUOTE_NONE)}
-    linked, near = neighbors(con, judged)
-    dev = {int(q["target_line"]) for q in read_tsv(HERE / "train-v2" / "questions.tsv") if q["batch"] in DEV_BATCHES}
-    dev_linked, dev_near = neighbors(con, dev)
-    plain_quotes = [q for q in quotes if q]
-    ranked = set()
-    for path in args.hold:
-        for s in json.loads(path.read_text("utf-8"))["searches"]:
-            ranked.update(s["candidates"])
+    guard = Guard(con, args.hold, args.hold_grades)
     ours = {}
     for line_id, ref in con.execute("SELECT id, heRef FROM line WHERE heRef IS NOT NULL"):
         ours.setdefault(ref_key(ref), line_id)
-    print(f"{len(held_books)} books held out, {len(linked)} lines judged or linked to one, {len(ranked)} lines a pool "
-          f"ranks; {len(ours)} references of ours", file=sys.stderr)
+    print(f"{len(ours)} references of ours", file=sys.stderr)
+    def near_of(paths):
+        """The queries, the lines and the places near the lines of [paths]' pairs."""
+        queries, lines, near = set(), set(), set()
+        for path in paths:
+            for raw in path.open(encoding="utf-8"):
+                pair = json.loads(raw)
+                queries.add(pair["anchor"])
+                lines.add(pair["line"])
+        for lid, book, index in lines_at(con, lines):
+            near |= {(book, index + d) for d in range(-NEAR, NEAR + 1)}
+        return queries, lines, near
+
+    kept_queries, kept_lines, kept_near = near_of(args.keep_test)   # an earlier run's test: out of these pairs too
+    _, _, learnt_near = near_of(args.avoid_in_test)                  # pairs learnt elsewhere: out of this test
 
     def line(lid):
         return con.execute("SELECT bookId, lineIndex, heRef, content FROM line WHERE id = ?", (lid,)).fetchone()
-
-    def touched(lid, row):
-        book, index, ref, content = row
-        return (lid in held_lines or book in held_books or lid in linked or (book, index) in near
-                or lid in dev_linked or (book, index) in dev_near or lid in ranked)
 
     usable = {}                # file -> [(query, line id, book id, line index, passage)]
     why = Counter()
@@ -128,17 +176,14 @@ def main() -> None:
                 if not QUERY_WORDS[0] <= len(query.split()) <= QUERY_WORDS[1]:
                     why["a query too short or too long"] += 1
                     continue
-                if touched(lid, row) or (row[2] and any(pt.search(row[2]) for pt in patterns)):
-                    why["near what an evaluation measures"] += 1
+                if query in kept_queries or lid in kept_lines or (row[0], row[1]) in kept_near:
+                    why["kept for an earlier test"] += 1
+                    continue
+                reason = guard.left_out(lid, row)
+                if reason:
+                    why[reason] += 1
                     continue
                 text = clean(row[3])
-                if text in held_texts:
-                    why["a copy of a held book's line"] += 1
-                    continue
-                bare = " ".join(re.sub(r"[^א-ת ]", " ", MARKS.sub("", row[3].replace("־", " "))).split())
-                if any(q in bare for q in plain_quotes):
-                    why["holds a quote's source"] += 1
-                    continue
                 passage = " ".join(text.split()[:MAX_PASSAGE_WORDS])
                 if len(passage.split()) < MIN_WORDS:
                     why["a line too short"] += 1
@@ -155,7 +200,8 @@ def main() -> None:
     test, test_queries, test_lines, test_near = [], set(), set(), set()
     quota = {name: round(args.test * n / total) for name, n in take.items()}
     for name, (query, lid, book, index, passage) in everything:
-        if quota[name] <= 0 or query in test_queries or lid in test_lines or (book, index) in test_near:
+        if (quota[name] <= 0 or query in test_queries or lid in test_lines or (book, index) in test_near
+                or (book, index) in learnt_near):
             continue
         quota[name] -= 1
         test.append({"anchor": query, "line": lid, "type": FILES[name][1]})
