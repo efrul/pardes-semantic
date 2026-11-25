@@ -141,7 +141,7 @@ if STAGE == "train":
         measure("base", None)
     # The teacher's training stops 45 min before the end, for its export and measure
     sh(f"python train_model.py --pairs {OUT}/train/pairs.jsonl --out {OUT}/teacher --limit {OPTIONS['pairs']} "
-       f"--batch-size {OPTIONS['batch']} --mini-batch 16 {MATRYOSHKA} --deadline {DEADLINE - 2700} --keep-checkpoints 1")
+       f"--batch-size {OPTIONS['batch']} --mini-batch 16 {MATRYOSHKA} --deadline {DEADLINE - OPTIONS.get('reserve', 45) * 60} --keep-checkpoints 1")
     sh(f"rm -rf {OUT}/teacher/checkpoints")
     measure("teacher", f"{OUT}/teacher")
 elif STAGE == "tune":
@@ -166,7 +166,7 @@ elif STAGE == "tune":
     lr = f"--lr {OPTIONS['lr']}" if OPTIONS.get("lr") else ""
     sh(f"python train_model.py --source {start} --pairs {pairs} --limit {OPTIONS['links']} "
        f"{questions} --question-repeat {OPTIONS['repeat']} {more} {negatives} {lr} {MATRYOSHKA} --out {OUT}/tuned "
-       f"--batch-size {OPTIONS['batch']} --mini-batch 16 --deadline {DEADLINE - 2700} --keep-checkpoints 1")
+       f"--batch-size {OPTIONS['batch']} --mini-batch 16 --deadline {DEADLINE - OPTIONS.get('reserve', 45) * 60} --keep-checkpoints 1")
     sh(f"rm -rf {OUT}/tuned/checkpoints")
     measure("tuned", f"{OUT}/tuned")
 elif STAGE == "distill":
@@ -397,7 +397,7 @@ def push(stage: str, opts: argparse.Namespace) -> None:
         check_quota(stage, opts)
     name = opts.as_ or stage
     kernels = kernels_of(opts)
-    options = {"hours": opts.hours, "pairs": opts.pairs, "batch": opts.batch, "texts": opts.texts, "distill_batch": opts.distill_batch,
+    options = {"hours": opts.hours, "reserve": opts.reserve, "pairs": opts.pairs, "batch": opts.batch, "texts": opts.texts, "distill_batch": opts.distill_batch,
                "layers": opts.layers, "epochs": opts.epochs,
                "chosen": opts.chosen, "weight": opts.weight, "release": opts.release, "links": opts.links,
                "repeat": opts.repeat, "teacher": opts.teacher, "models": opts.models,
@@ -495,6 +495,9 @@ def main() -> None:
                     help="the kernels to read stages from when they ran under another name, e.g. tune=tune2")
     ap.add_argument("--start", choices=("teacher", "student"), default="teacher",
                     help="tune: train's teacher, or distill's student (--model-release: a student released here)")
+    ap.add_argument("--reserve", type=float, default=45.0,
+                    help="train, tune: the minutes of --hours kept after the training, for the export and its measure "
+                         "(the export alone takes about 5)")
     ap.add_argument("--hours", type=float, default=8.0,
                     help="the stage's time budget (sessions: 9-12 h): train, tune, distill and pool stop by it; for embed "
                          "it is only what the quota's check counts")
