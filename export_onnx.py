@@ -66,7 +66,7 @@ def export_fp32(loaded: m.Loaded, path: Path) -> None:
         )
 
 
-def quantize(src: Path, dst: Path, gather: bool) -> None:
+def quantize(src: Path, dst: Path, gather: bool, fp32_nodes: list[str] = ()) -> None:
     from onnxruntime.quantization import QuantType, quantize_dynamic
 
     # With Gather, the 128k x 768 embedding table too (a quarter of the weights): 366 MB instead of 661 MB, mean
@@ -75,7 +75,17 @@ def quantize(src: Path, dst: Path, gather: bool) -> None:
     # reduce_range (7-bit weights): on x86 CPUs without VNNI (many users', Kaggle's) the int8 kernels saturate with
     # full-range weights; there the model's cosine to PyTorch fell to 0.78. It costs nothing measurable with VNNI
     quantize_dynamic(str(src), str(dst), weight_type=QuantType.QInt8, per_channel=True, reduce_range=True,
-                     op_types_to_quantize=ops)
+                     op_types_to_quantize=ops, nodes_to_exclude=list(fp32_nodes))
+
+
+def ffn_outputs(path: Path) -> list[str]:
+    """The MatMuls that end each layer's feed-forward block (NeoBERT's ffn/w3), in the graph's order: where a layer's
+    largest activations meet a weight. tune14's int8 drifted to a cosine of 0.939 on one passage until its third
+    layer's was left in fp32 (0.993, 8 MB more); leaving any other single matrix in fp32 did not help."""
+    import onnx
+
+    return [n.name for n in onnx.load(str(path), load_external_data=False).graph.node
+            if n.op_type == "MatMul" and n.name.endswith("/ffn/w3/MatMul")]
 
 
 def run_onnx(path: Path, loaded: m.Loaded, texts: list[str], max_tokens: int) -> np.ndarray:
@@ -109,6 +119,10 @@ def main() -> int:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--keep-fp32", action="store_true", help="keep model.fp32.onnx next to the int8 one")
     ap.add_argument("--no-gather", action="store_true", help="leave the embedding table in fp32 (larger, closer)")
+    ap.add_argument("--fp32-nodes", action="append", default=[],
+                    help="MatMul nodes to leave in fp32, by their names in the graph (comma separated; repeatable)")
+    ap.add_argument("--no-fp32-search", action="store_true",
+                    help="when int8 drifts beyond the thresholds, fail as it is: do not look for a matrix to leave in fp32")
     ap.add_argument("--source", help="a local model (train_model.py, distill_model.py) instead of the pinned Dicta one")
     ap.add_argument("--hybrid-dense-weight", type=float, default=1.0,
                     help="the dense side's weight in the app's RRF, as evaluate.py --dense-weights measured it")
@@ -137,19 +151,45 @@ def main() -> int:
     t0 = time.time()
     export_fp32(loaded, fp32)
     print(f"Exported fp32 ({fp32.stat().st_size / 1e6:.0f} MB) in {time.time() - t0:.0f}s")
-    t0 = time.time()
-    quantize(fp32, int8, gather=not args.no_gather)
-    print(f"Quantized int8 ({int8.stat().st_size / 1e6:.0f} MB) in {time.time() - t0:.0f}s")
-
-    report = {"padding_min_cos": pad_cos}
-    for name, path in (("fp32", fp32), ("int8", int8)):
+    def measured(path: Path) -> dict:
         q = run_onnx(path, loaded, queries, m.QUERY_MAX_TOKENS)
         d = run_onnx(path, loaded, docs, m.DOCUMENT_MAX_TOKENS)
         cos = np.concatenate([cosines(q, ref_q), cosines(d, ref_d)])
         same_top1 = sum(a[0] == b[0] for a, b in zip(rankings(q, d[:len(PAIRS)]), rankings(ref_q, ref_d[:len(PAIRS)])))
-        report[name] = {"min_cos": float(cos.min()), "mean_cos": float(cos.mean()),
-                        "same_top1": f"{same_top1}/{len(PAIRS)}"}
-        print(f"{name}: cosine to PyTorch min {cos.min():.5f} mean {cos.mean():.5f}, same top-1 {same_top1}/{len(PAIRS)}")
+        return {"min_cos": float(cos.min()), "mean_cos": float(cos.mean()), "same_top1": f"{same_top1}/{len(PAIRS)}"}
+
+    def passes(r: dict) -> bool:
+        return r["min_cos"] >= MIN_COS_INT8 and r["mean_cos"] >= MIN_MEAN_COS_INT8
+
+    t0 = time.time()
+    fp32_nodes = [n for part in args.fp32_nodes for n in part.split(",") if n]
+    quantize(fp32, int8, gather=not args.no_gather, fp32_nodes=fp32_nodes)
+    print(f"Quantized int8 ({int8.stat().st_size / 1e6:.0f} MB) in {time.time() - t0:.0f}s")
+
+    report = {"padding_min_cos": pad_cos, "fp32": measured(fp32), "int8": measured(int8)}
+    # A model whose int8 drifts beyond the thresholds: each layer's feed-forward output left in fp32 in turn (one
+    # matrix), the one that brings it closest kept when it passes
+    if not passes(report["int8"]) and not args.no_fp32_search:
+        trial = out / "trial.int8.onnx"
+        tried = []
+        for node in ffn_outputs(fp32):
+            quantize(fp32, trial, gather=not args.no_gather, fp32_nodes=fp32_nodes + [node])
+            r = measured(trial)
+            tried.append((r["min_cos"], node, r))
+            print(f"  int8 with {node} in fp32: min {r['min_cos']:.5f} mean {r['mean_cos']:.5f}")
+        best = max(tried, default=None)
+        if best and passes(best[2]):
+            fp32_nodes.append(best[1])
+            quantize(fp32, int8, gather=not args.no_gather, fp32_nodes=fp32_nodes)
+            report["int8_before"] = report["int8"]
+            report["int8"] = measured(int8)
+        trial.unlink(missing_ok=True)
+    report["fp32_nodes"] = fp32_nodes
+    for name in ("fp32", "int8"):
+        r = report[name]
+        print(f"{name}: cosine to PyTorch min {r['min_cos']:.5f} mean {r['mean_cos']:.5f}, same top-1 {r['same_top1']}"
+              + (f" ({len(fp32_nodes)} MatMul in fp32: {', '.join(fp32_nodes)}; {int8.stat().st_size / 1e6:.0f} MB)"
+                 if name == "int8" and fp32_nodes else ""))
 
     ref_hits = sum(r[0] == i for i, r in enumerate(rankings(ref_q, ref_d[:len(PAIRS)])))
     report["pytorch_pairs_top1"] = f"{ref_hits}/{len(PAIRS)}"
@@ -175,7 +215,8 @@ def main() -> int:
     manifest = {
         "format": 1,
         "id": loaded.model_id,
-        "quantization": "int8 dynamic, per channel, reduce range, " + ("MatMul" if args.no_gather else "MatMul+Gather"),
+        "quantization": "int8 dynamic, per channel, reduce range, " + ("MatMul" if args.no_gather else "MatMul+Gather")
+                        + (f", {len(fp32_nodes)} MatMul left fp32 ({', '.join(fp32_nodes)})" if fp32_nodes else ""),
         "baseModel": m.MODEL_ID,
         "baseModelRevision": m.MODEL_REVISION,
         # A local model is the Dicta one fine-tuned and/or distilled on the library's links (train_model.py)
