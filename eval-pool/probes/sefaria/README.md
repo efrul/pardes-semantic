@@ -25,6 +25,7 @@
 | [`match.py`](match.py) | כמה מהחיפושים של המשתמשים זהים לשם של נושא |
 | [`hard.py`](hard.py) | באיזה מקום `tune3` שם את המקור של נושא לפי שמו, וכמה החיפושים של המשתמשים קרובים לנושאים |
 | [`agree.py`](agree.py) | כשחיפוש שנשפט קרוב לנושא: האם המקורות של הנושא הם השורות שקיבלו ציון טוב |
+| [`find_topics.py`](find_topics.py) | שלוש דרכים למצוא נושא לחיפוש (השם, המילים, המשמעות) על הנושאים שפרדס מצרף: כמה חיפושים, האם השורות של הנושא טובות, והדף כשהן ראשונות |
 | [`embed_pairs.py`](embed_pairs.py) | הווקטורים של `tune3` למדגם של זוגות, עד שמונה לנושא, בלי שורות שמבחן מדרג |
 | [`topic_map.py`](topic_map.py) | מטריצה אחת מעל הווקטורים הקפואים שנלמדת מהזוגות, וקובצי דירוג של המבחנים שלנו איתה |
 | [`descriptions.py`](descriptions.py) | המקורות שנכתב להם תיאור בעברית: האם `tune3` מוצא מקור לפי הכותרת והתיאור שלו |
@@ -39,6 +40,9 @@ python eval-pool/probes/sefaria/overlap.py
 python -I eval-pool/probes/sefaria/match.py
 python eval-pool/probes/sefaria/hard.py
 python eval-pool/probes/sefaria/agree.py
+git -C pardes show origin/claude/kind-babbage-368jtx:SeforimApp/src/jvmMain/resources/sefaria/topics.tsv.gz \
+    > build/sefaria/pardes-topics.tsv.gz      # the topics Pardes ships (its Sefaria branch, or main once merged)
+python eval-pool/probes/sefaria/find_topics.py build/sefaria/pardes-topics.tsv.gz --run build/judge/run.jsonl
 python eval-pool/probes/sefaria/embed_pairs.py 8
 python eval-pool/probes/sefaria/descriptions.py 20000
 python eval-pool/probes/sefaria/sugyot.py build/rerank/vec-tune3-base.npz
