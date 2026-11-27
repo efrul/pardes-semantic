@@ -147,9 +147,11 @@ if STAGE == "train":
 elif STAGE == "tune":
     # The fine-tuned model trained on: the training questions, repeated, and some of the links' pairs train's teacher
     # learned from. It starts from train's teacher, or from a student: distill's (--start student) or one released here
-    # (--model-release)
+    # (--model-release), or from another family's model on the Hub (--start-hub, as dicta-il/BEREL_3.0: mean pooling)
     EVAL = find_input("train", "eval")
-    if OPTIONS.get("model_release"):
+    if OPTIONS.get("start_hub"):
+        start = OPTIONS["start_hub"]
+    elif OPTIONS.get("model_release"):
         start = release_model(OPTIONS["model_release"])
     elif OPTIONS.get("start") == "student":
         start = find_input("distill", "student")
@@ -406,7 +408,7 @@ def push(stage: str, opts: argparse.Namespace) -> None:
                "rerank_only": opts.rerank_only,
                "short_merge": opts.short_merge if opts.short_merge is not None else 8 if stage == "patch" else 0,
                "strip_number": opts.strip_number, "more": [f.name for f in opts.more] if stage in ("tune", "distill") else [],
-               "questions": [f.name for f in opts.questions], "negatives": opts.negatives, "start": opts.start,
+               "questions": [f.name for f in opts.questions], "negatives": opts.negatives, "start": opts.start, "start_hub": opts.start_hub,
                "lr": opts.lr, "matryoshka": opts.matryoshka, "kernels": kernels, "kernel": name}
     data = {}
     datasets = []
@@ -495,6 +497,8 @@ def main() -> None:
                     help="the kernels to read stages from when they ran under another name, e.g. tune=tune2")
     ap.add_argument("--start", choices=("teacher", "student"), default="teacher",
                     help="tune: train's teacher, or distill's student (--model-release: a student released here)")
+    ap.add_argument("--start-hub", help="tune: start from this model of the Hugging Face Hub instead, as "
+                                        "dicta-il/BEREL_3.0 (sentence-transformers gives it mean pooling)")
     ap.add_argument("--reserve", type=float, default=45.0,
                     help="train, tune: the minutes of --hours kept after the training, for the export and its measure "
                          "(the export alone takes about 5)")

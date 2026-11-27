@@ -1,16 +1,20 @@
 """A probe: two or more models' ranks files as one, to see whether a second model adds to the first.
 
-    python eval-pool/probes/fuse_ranks.py <out.json> ranks-a.json[@weight] ranks-b.json[@weight] ...
+    python eval-pool/probes/fuse_ranks.py [--raw] <out.json> ranks-a.json[@weight] ranks-b.json[@weight] ...
 
 Each model's scores of a search's candidates are standardized (mean 0, deviation 1) and summed, with the weights. Only
 the searches and the candidates every file has. The output is a ranks file as pool_rank.py's, for the same measures.
+--raw: the cosines themselves, weighted and summed, as the cosine of the models' normalized vectors put end to end
+(each scaled by the square root of its weight, the weights summing to one) would be.
 """
 import json
 import sys
 
 import numpy as np
 
-out, *specs = sys.argv[1:]
+args = sys.argv[1:]
+raw = args[0] == "--raw"
+out, *specs = args[1:] if raw else args
 models = []
 for spec in specs:
     path, _, weight = spec.partition("@")
@@ -26,7 +30,7 @@ for key in models[0][0]:
         score = dict(zip(ranks[key]["ids"], ranks[key]["scores"]))
         v = np.array([score[d] for d in ids])
         if len(v):
-            total += weight * (v - v.mean()) / (v.std() + 1e-9)
+            total += weight * (v if raw else (v - v.mean()) / (v.std() + 1e-9))
     order = np.argsort(-total, kind="stable")
     fused[key] = {"ids": [ids[k] for k in order], "scores": [round(float(total[k]), 5) for k in order]}
 with open(out, "w", encoding="utf-8") as f:
