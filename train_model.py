@@ -26,11 +26,15 @@ which no row learns (one more random negative, as the batch's other passages are
 --matryoshka trains the vector's first dimensions too, each a vector of its own (MatryoshkaLoss over the same loss):
 TRAINING_PLAN.md's teacher v2 (768,512,384,256), whose first 384 can be measured against the 384 of the student.
 
+--device xla trains on a TPU (PyTorch/XLA: Kaggle's TPU v5e-8, one chip; tpu_probe.py, RUN5_PLAN.md, 3): every text
+padded to the same length, the forward in bf16, no checkpoints (a run takes minutes there).
+
 Writes a sentence-transformers directory that export_onnx.py --source and embed_corpus.py --source take.
 """
 
 import argparse
 import json
+import os
 import random
 from collections import Counter
 from pathlib import Path
@@ -78,9 +82,10 @@ def last_checkpoint(out: Path) -> str | None:
     return str(ckpts[-1]) if ckpts else None
 
 
-def deadline_callback(deadline: float):
+def deadline_callback(deadline: float, save: bool = True):
     """Stops the training cleanly (and so saves the model) at [deadline] (Unix seconds): a Kaggle run that outlives its
-    session loses its output, a run that stops a little early keeps a usable model."""
+    session loses its output, a run that stops a little early keeps a usable model. [save]: a checkpoint too (not on a
+    TPU, where the trainer saves only the weights)."""
     import time
 
     from transformers import TrainerCallback
@@ -90,7 +95,7 @@ def deadline_callback(deadline: float):
             if time.time() > deadline:
                 print(f"Deadline reached at step {state.global_step}: stopping and saving")
                 control.should_training_stop = True
-                control.should_save = True
+                control.should_save = save
             return control
 
     return Deadline()
@@ -104,6 +109,47 @@ def load_st(source: str | None, device: str):
                              prompts={"query": m.QUERY_PREFIX, "document": m.DOCUMENT_PREFIX})
     st.max_seq_length = TRAIN_MAX_TOKENS
     return st
+
+
+def for_xla(st) -> None:
+    """Readies [st] for a TPU. XLA compiles a graph for each shape it meets, so every text is padded to
+    TRAIN_MAX_TOKENS (a shape for each length would compile again at nearly every step). The forward runs in bf16, its
+    embeddings back in fp32 for the loss. The cached loss copies the random state of CUDA's devices before its first
+    pass, to repeat the model's dropout in the second; there is none to copy on a TPU, so a model with dropout is
+    refused (Dicta's NeoBERT and our students have none)."""
+    import functools
+    import importlib
+
+    import torch
+
+    # The module, not the class of the same name that sentence_transformers.losses holds
+    cached = importlib.import_module("sentence_transformers.losses.CachedMultipleNegativesRankingLoss")
+
+    if any(isinstance(mod, torch.nn.Dropout) and mod.p > 0 for mod in st.modules()):
+        raise SystemExit("--device xla: the model has dropout, which the cached loss could not repeat on a TPU")
+    first = st[0]
+    first.tokenize = functools.partial(first.tokenize, padding="max_length")
+    forward = st.forward
+
+    def bf16_forward(features, *args, **kwargs):
+        with torch.autocast("xla", dtype=torch.bfloat16):
+            out = forward(features, *args, **kwargs)
+        out["sentence_embedding"] = out["sentence_embedding"].float()
+        return out
+
+    st.forward = bf16_forward
+
+    class NoRandomState:
+        def __init__(self, *tensors) -> None:
+            pass
+
+        def __enter__(self) -> None:
+            pass
+
+        def __exit__(self, *exc) -> None:
+            pass
+
+    cached.RandContext = NoRandomState
 
 
 def main() -> None:
@@ -131,6 +177,9 @@ def main() -> None:
     ap.add_argument("--keep-checkpoints", type=int, default=2,
                     help="checkpoints kept (with the optimizer: ~4.4 GB each for the full-size model)")
     args = ap.parse_args()
+    xla = args.device == "xla"
+    if xla:
+        os.environ.setdefault("PJRT_DEVICE", "TPU")
 
     from datasets import Dataset
     from sentence_transformers import SentenceTransformerTrainer, SentenceTransformerTrainingArguments
@@ -161,7 +210,10 @@ def main() -> None:
     data = Dataset.from_dict(columns)
     print(f"{len(data)} pairs ({links} of links)")
 
-    st = load_st(args.source, args.device)
+    # On a TPU the trainer moves the model to the chip
+    st = load_st(args.source, "cpu" if xla else args.device)
+    if xla:
+        for_xla(st)
     loss = CachedMultipleNegativesRankingLoss(st, mini_batch_size=args.mini_batch)
     if args.matryoshka:
         from sentence_transformers.losses import MatryoshkaLoss
@@ -179,19 +231,23 @@ def main() -> None:
         batch_sampler=BatchSamplers.NO_DUPLICATES,
         prompts=prompts,
         logging_steps=20,
-        save_strategy="steps",
+        save_strategy="no" if xla else "steps",
         save_steps=args.save_steps,
         save_total_limit=args.keep_checkpoints,
         report_to="none",
-        use_cpu=not gpu,
+        use_cpu=not (gpu or xla),
         dataloader_drop_last=True,
+        # The fused AdamW runs on CUDA and CPU only: on a TPU the same AdamW, unfused
+        **({"optim": "adamw_torch"} if xla else {}),
     )
-    callbacks = [deadline_callback(args.deadline)] if args.deadline else None
+    callbacks = [deadline_callback(args.deadline, save=not xla)] if args.deadline else None
     trainer = SentenceTransformerTrainer(model=st, args=training, train_dataset=data, loss=loss, callbacks=callbacks)
     resume = last_checkpoint(args.out)
     if resume:
         print(f"Resuming from {resume}")
     trainer.train(resume_from_checkpoint=resume)
+    if xla:
+        st.to("cpu")
     st.save(str(args.out))
     print(f"Saved to {args.out}")
 

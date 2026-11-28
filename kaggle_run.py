@@ -22,6 +22,9 @@
     #   distill's student. Then: push pool --models tune2/tuned@merge+strip, push embed --chosen tuned --from tune=tune2
     python kaggle_run.py push tune --as tune6 --from train=train2 --matryoshka 768,512,384,256 --questions ... --negatives
     #   train2's teacher (push train --as train2 --train-pairs ...) tuned, its Matryoshka kept
+    python kaggle_run.py push tune --as tpu14 --accelerator TpuV5E8 --start student --questions ... --negatives
+    #   on one chip of Kaggle's TPU (train_model.py --device xla, RUN5_PLAN.md, 3): its own weekly quota, minutes of
+    #   training; tune only
 
 Each stage is a private Kaggle script kernel (`<user>/pardes-semantic-<stage>`, GPU and internet on; `--as <name>`:
 `<user>/pardes-semantic-<name>`, read by the stages after it with `--from <stage>=<name>`). The code of this
@@ -67,6 +70,10 @@ os.makedirs(SRC, exist_ok=True); os.makedirs(TMP, exist_ok=True)
 # The steps' output reaches the kernel's log as it comes (a pipe is block-buffered: hours of training showed nothing)
 os.environ["PYTHONUNBUFFERED"] = "1"
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+TPU = OPTIONS.get("tpu")
+if TPU:
+    # The TPU image's TensorFlow does not import, and transformers imports it when it is there (tpu_probe.py)
+    os.environ.update({"USE_TF": "0", "USE_JAX": "0", "USE_FLAX": "0", "PJRT_DEVICE": "TPU"})
 with tarfile.open(fileobj=io.BytesIO(base64.b64decode(__BUNDLE__))) as t:
     t.extractall(SRC, filter="data")
 os.chdir(SRC)
@@ -75,10 +82,19 @@ def sh(cmd):
     print(f"[{(time.time() - START) / 60:.0f} min] $ {cmd}", flush=True)
     subprocess.run(cmd, shell=True, check=True)
 
-sh("nvidia-smi --query-gpu=name,memory.total --format=csv; df -h /kaggle/working /tmp | tail -2")
-# Kaggle's CUDA torch is kept; the rest pinned as the scripts were checked with
-sh('pip -q install "transformers==4.57.6" "tokenizers>=0.22,<0.23" "sentence-transformers==5.1.2" "datasets>=3,<5" '
-   '"accelerate>=1.0" "onnx>=1.19" "onnxscript>=0.5" "onnxruntime==1.31.0" "zstandard>=0.23"')
+if TPU:
+    # Kaggle's TPU image has no PyTorch/XLA: 2.8.1 with the torch it needs, and the rest as tpu_probe.py ran them (the
+    # image's datasets needs a huggingface-hub that transformers 4.57 refuses)
+    sh("nproc; free -g | head -2; df -h /kaggle/working /tmp | tail -2")
+    sh("pip -q install 'torch==2.8.0' 'torch_xla[tpu]==2.8.1' --extra-index-url https://download.pytorch.org/whl/cpu")
+    sh('pip -q install "transformers==4.57.6" "tokenizers>=0.22,<0.23" "sentence-transformers==5.1.2" "datasets==3.6.0" '
+       '"huggingface-hub>=0.34,<1.0" "accelerate>=1.0,<1.11" "onnx>=1.19" "onnxscript>=0.5" "onnxruntime==1.31.0" '
+       '"zstandard>=0.23"')
+else:
+    sh("nvidia-smi --query-gpu=name,memory.total --format=csv; df -h /kaggle/working /tmp | tail -2")
+    # Kaggle's CUDA torch is kept; the rest pinned as the scripts were checked with
+    sh('pip -q install "transformers==4.57.6" "tokenizers>=0.22,<0.23" "sentence-transformers==5.1.2" "datasets>=3,<5" '
+       '"accelerate>=1.0" "onnx>=1.19" "onnxscript>=0.5" "onnxruntime==1.31.0" "zstandard>=0.23"')
 
 def under(d, slug):
     # Whether [d] is inside the input [slug] names: a whole part of the path, as "...-tune" begins "...-tune2" too
@@ -124,7 +140,8 @@ def _measure(name, source):
     src = f"--source {source}" if source else ""
     model, vec, rep = f"{OUT}/model-{name}", f"{TMP}/vec-{name}", f"{OUT}/report-{name}"
     sh(f"python export_onnx.py {src} --out {model}")
-    sh(f"python embed_corpus.py --corpus {EVAL}/corpus.jsonl --backend torch --device cuda --dtype float16 {src} --out {vec}")
+    device = "--device cpu --dtype float32" if TPU else "--device cuda --dtype float16"
+    sh(f"python embed_corpus.py --corpus {EVAL}/corpus.jsonl --backend torch {device} {src} --out {vec}")
     sh(f"python evaluate.py --eval {EVAL} --vectors {vec} --model {model} --out {rep}")
 
 if STAGE == "train":
@@ -166,9 +183,23 @@ elif STAGE == "tune":
     more = " ".join(f"--more {find_data(name)}" for name in OPTIONS["more"])
     negatives = "--negatives" if OPTIONS.get("negatives") else ""
     lr = f"--lr {OPTIONS['lr']}" if OPTIONS.get("lr") else ""
-    sh(f"python train_model.py --source {start} --pairs {pairs} --limit {OPTIONS['links']} "
-       f"{questions} --question-repeat {OPTIONS['repeat']} {more} {negatives} {lr} {MATRYOSHKA} --out {OUT}/tuned "
-       f"--batch-size {OPTIONS['batch']} --mini-batch 16 --deadline {DEADLINE - OPTIONS.get('reserve', 45) * 60} --keep-checkpoints 1")
+    common = (f"python train_model.py --source {start} --pairs {pairs} --limit {OPTIONS['links']} "
+              f"{questions} --question-repeat {OPTIONS['repeat']} {more} {negatives} {lr} {MATRYOSHKA} --out {OUT}/tuned "
+              f"--deadline {DEADLINE - OPTIONS.get('reserve', 45) * 60} --keep-checkpoints 1")
+    if TPU:
+        # One chip takes the batch of the two T4s (each --batch), in mini-batches of 64: the cached loss gives the same
+        # gradients at any size (the model has no dropout), and a larger one fills the chip better. Smaller ones if
+        # its memory runs out; each try starts the training again
+        for mini in (64, 32, 16):
+            try:
+                sh(f"{common} --device xla --batch-size {2 * OPTIONS['batch']} --mini-batch {mini}")
+                break
+            except subprocess.CalledProcessError as e:
+                print(f"TRAINING FAILED with mini-batches of {mini}: {e}", flush=True)
+        else:
+            raise SystemExit("The training failed on the TPU")
+    else:
+        sh(f"{common} --batch-size {OPTIONS['batch']} --mini-batch 16")
     sh(f"rm -rf {OUT}/tuned/checkpoints")
     measure("tuned", f"{OUT}/tuned")
 elif STAGE == "distill":
@@ -395,7 +426,15 @@ def kernels_of(opts: argparse.Namespace) -> dict[str, str]:
 
 
 def push(stage: str, opts: argparse.Namespace) -> None:
-    if not opts.dry_run and stage != "int8":
+    tpu = (opts.accelerator or "").startswith("Tpu")
+    if tpu and stage != "tune":
+        sys.exit("--accelerator TpuV5E8: tune only (train_model.py --device xla, RUN5_PLAN.md, 3)")
+    if tpu and not opts.dry_run:
+        from kaggle import api
+
+        q = api.quota_view().tpu_quota
+        print(f"TPU quota: {q.time_used.total_seconds() / 3600:.1f} h used of {q.total_time_allowed.total_seconds() / 3600:.1f} h")
+    elif not opts.dry_run and stage != "int8":
         check_quota(stage, opts)
     name = opts.as_ or stage
     kernels = kernels_of(opts)
@@ -409,7 +448,7 @@ def push(stage: str, opts: argparse.Namespace) -> None:
                "short_merge": opts.short_merge if opts.short_merge is not None else 8 if stage == "patch" else 0,
                "strip_number": opts.strip_number, "more": [f.name for f in opts.more] if stage in ("tune", "distill") else [],
                "questions": [f.name for f in opts.questions], "negatives": opts.negatives, "start": opts.start, "start_hub": opts.start_hub,
-               "lr": opts.lr, "matryoshka": opts.matryoshka, "kernels": kernels, "kernel": name}
+               "lr": opts.lr, "matryoshka": opts.matryoshka, "kernels": kernels, "kernel": name, "tpu": tpu}
     data = {}
     datasets = []
     if stage == "train" and opts.train_pairs:
@@ -456,10 +495,13 @@ def push(stage: str, opts: argparse.Namespace) -> None:
         sources += [slug(k) for k in sorted(named) if slug(k) not in sources]
     meta = {
         "id": slug(name), "title": f"pardes-semantic-{name}", "code_file": "run.py", "language": "python",
-        "kernel_type": "script", "is_private": True, "enable_gpu": stage != "int8", "enable_internet": True,
+        "kernel_type": "script", "is_private": True, "enable_gpu": stage != "int8" and not tpu, "enable_internet": True,
         "dataset_sources": datasets, "competition_sources": [], "kernel_sources": sources, "model_sources": [],
     }
-    if meta["enable_gpu"] and opts.accelerator:
+    if tpu:
+        meta["enable_tpu"] = True
+        meta["machine_shape"] = opts.accelerator
+    elif meta["enable_gpu"] and opts.accelerator:
         # Named, not left to Kaggle's default: on 2026-11-21 two pushes without one waited in the queue 1.8 and over
         # 3.5 hours, while the same pool pushed with NvidiaTeslaT4 started within seconds
         meta["machine_shape"] = opts.accelerator
@@ -565,7 +607,8 @@ def main() -> None:
     ap.add_argument("--release", help="embed: the SeforimLibrary release tag (default: the latest when the stage runs); "
                     "pool: the release the evaluations ran on")
     ap.add_argument("--accelerator", default="NvidiaTeslaT4",
-                    help="the GPU stages' Kaggle machine shape (NvidiaTeslaP100 is retired); empty: Kaggle's default")
+                    help="the GPU stages' Kaggle machine shape (NvidiaTeslaP100 is retired); empty: Kaggle's default; "
+                         "TpuV5E8: tune on one chip of the TPU")
     ap.add_argument("--every", type=int, default=120, help="wait: seconds between status checks")
     ap.add_argument("--dry-run", action="store_true", help="push: write the kernel in build/kaggle, do not send it")
     args = ap.parse_args()
